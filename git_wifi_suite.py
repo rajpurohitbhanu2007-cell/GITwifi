@@ -1,0 +1,5069 @@
+"""
+GITwifi Suite - Modern Windows Native Clean Suite
+Engineered for high performance, zero bloat, and resilient captive portal automation.
+Developed with the help of Antigravity by StormDucky.
+
+Features:
+- Dual-Mode Shotgun Probing (Fastest captive portal detection)
+- Resilient FortiGate Authentication with Multi-regex extraction
+- HTTP / HTTPS CONNECT Tunneling Proxy Bridge for Hotspot Connection Sharing
+- Profile Management & Auto-Switching
+- Stealth Device-Fingerprint Spoofing
+- Comprehensive Network & Port Diagnostics
+- Windows System Tray & Native Toast / Audio Alerts
+"""
+
+from __future__ import annotations
+
+import sys
+import os
+import copy
+import time
+import datetime
+import re
+import json
+import base64
+import ctypes
+from ctypes import wintypes
+import socket
+import select
+import threading
+import queue
+import subprocess
+import shutil
+import ipaddress
+from typing import Optional, Dict, Any, Callable, Set, Tuple
+import requests
+from requests.exceptions import RequestException, Timeout
+from urllib.parse import urlparse, urlsplit, urlunsplit
+import urllib3
+import tkinter as tk
+from tkinter import ttk, messagebox, filedialog
+from PIL import Image, ImageDraw, ImageTk
+
+try:
+    import winreg
+    HAS_WINREG = True
+except ImportError:
+    winreg = None
+    HAS_WINREG = False
+
+# Optional Windows Sound library guard
+try:
+    import winsound
+    HAS_WINSOUND = True
+except ImportError:
+    winsound = None
+    HAS_WINSOUND = False
+
+# Optional System Tray library guard
+try:
+    import pystray
+    from pystray import MenuItem as item
+    HAS_PYSTRAY = True
+except ImportError:
+    pystray = None
+    item = None
+    HAS_PYSTRAY = False
+
+# Windows High-DPI Awareness for crisp rendering
+try:
+    ctypes.windll.shcore.SetProcessDpiAwareness(1)
+except Exception:
+    try:
+        ctypes.windll.user32.SetProcessDPIAware()
+    except Exception:
+        pass
+
+# Disable noisy InsecureRequestWarning when dealing with self-signed captive portals
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+# ==========================================
+# CONSTANTS & COMPILED REGEX PATTERNS
+# ==========================================
+CREATE_NO_WINDOW = 0x08000000
+
+class AppConstants:
+    DEFAULT_PORTAL_PORT: int = 1000
+    DEFAULT_PROXY_PORT: int = 8888
+    PROBE_URL: str = "http://connectivitycheck.gstatic.com/generate_204"
+    HEADER_BUFFER_MAX: int = 8192
+    SOCKET_CONNECT_TIMEOUT: float = 8.0
+    PROBE_HTTP_TIMEOUT: float = 6.0
+    AUTH_POST_TIMEOUT: float = 15.0
+    KEEPALIVE_HTTP_TIMEOUT: float = 6.0
+    LOGOUT_HTTP_TIMEOUT: float = 6.0
+    SELECT_POLL_TIMEOUT: float = 10.0
+    PORTAL_USAGE_SYNC_INTERVAL: float = 30.0
+    PORTAL_USAGE_TIMEOUT: float = 5.0
+
+# Precompiled Regular Expressions for High Performance
+REGEX_MAGIC_FGT = re.compile(r"[?&]([0-9a-fA-F]{10,})")
+REGEX_MAGIC_QUERY = re.compile(r"[?&]magic=([0-9a-fA-F]+)")
+REGEX_MAGIC_INPUT1 = re.compile(r'name=["\']magic["\']\s+value=["\']([^"\']+)["\']')
+REGEX_MAGIC_INPUT2 = re.compile(r'input[^>]*name=["\']magic["\'][^>]*value=["\']([^"\']+)["\']')
+REGEX_KEEPALIVE_URL = re.compile(r"keepalive\?([0-9a-fA-F]+)")
+REGEX_FGTAUTH_URL = re.compile(r"fgtauth\?([0-9a-fA-F]+)")
+REGEX_LOGOUT_URL = re.compile(r"logout\?([0-9a-fA-F]+)")
+
+# ==========================================
+# WINDOWS NATIVE NETWORK TELEMETRY (MIB)
+# ==========================================
+class MIB_IF_ROW2(ctypes.Structure):
+    _fields_ = [
+        ('InterfaceLuid', ctypes.c_uint64),
+        ('InterfaceIndex', wintypes.DWORD),
+        ('InterfaceGuid', ctypes.c_byte * 16),
+        ('Alias', wintypes.WCHAR * 257),
+        ('Description', wintypes.WCHAR * 257),
+        ('PhysicalAddressLength', wintypes.DWORD),
+        ('PhysicalAddress', wintypes.BYTE * 32),
+        ('PermanentPhysicalAddress', wintypes.BYTE * 32),
+        ('Mtu', wintypes.DWORD),
+        ('Type', wintypes.DWORD),
+        ('TunnelType', ctypes.c_int),
+        ('MediaType', ctypes.c_int),
+        ('PhysicalMediumType', ctypes.c_int),
+        ('AccessType', ctypes.c_int),
+        ('DirectionType', ctypes.c_int),
+        ('InterfaceAndOperStatusFlags', ctypes.c_byte),
+        ('OperStatus', ctypes.c_int),
+        ('AdminStatus', ctypes.c_int),
+        ('MediaConnectState', ctypes.c_int),
+        ('NetworkGuid', ctypes.c_byte * 16),
+        ('ConnectionType', ctypes.c_int),
+        ('TransmitLinkSpeed', ctypes.c_uint64),
+        ('ReceiveLinkSpeed', ctypes.c_uint64),
+        ('InOctets', ctypes.c_uint64),
+        ('InUcastPkts', ctypes.c_uint64),
+        ('InNUcastPkts', ctypes.c_uint64),
+        ('InDiscards', ctypes.c_uint64),
+        ('InErrors', ctypes.c_uint64),
+        ('InUnknownProtos', ctypes.c_uint64),
+        ('InUcastOctets', ctypes.c_uint64),
+        ('InMulticastOctets', ctypes.c_uint64),
+        ('InBroadcastOctets', ctypes.c_uint64),
+        ('OutOctets', ctypes.c_uint64),
+        ('OutUcastPkts', ctypes.c_uint64),
+        ('OutNUcastPkts', ctypes.c_uint64),
+        ('OutDiscards', ctypes.c_uint64),
+        ('OutErrors', ctypes.c_uint64),
+        ('OutUcastOctets', ctypes.c_uint64),
+        ('OutMulticastOctets', ctypes.c_uint64),
+        ('OutBroadcastOctets', ctypes.c_uint64),
+        ('OutQLen', ctypes.c_uint64),
+    ]
+
+class MIB_IF_TABLE2(ctypes.Structure):
+    _fields_ = [
+        ('NumEntries', wintypes.ULONG),
+        ('Table', MIB_IF_ROW2 * 1)
+    ]
+
+def get_system_network_io() -> Tuple[int, int]:
+    """Retrieve cumulative (in_bytes, out_bytes) across active physical network adapters via iphlpapi."""
+    try:
+        pTable = ctypes.POINTER(MIB_IF_TABLE2)()
+        if ctypes.windll.iphlpapi.GetIfTable2(ctypes.byref(pTable)) == 0:
+            table = pTable.contents
+            actual_table = ctypes.cast(
+                ctypes.byref(table.Table),
+                ctypes.POINTER(MIB_IF_ROW2 * table.NumEntries)
+            ).contents
+            tot_in, tot_out = 0, 0
+            for row in actual_table:
+                alias = str(row.Alias).strip()
+                descr = str(row.Description).strip()
+                # Exclude intermediate NDIS filters/schedulers and virtual/hotspot/VPN adapters to prevent double counting (Bug 41)
+                is_excluded = any(x in alias.lower() or x in descr.lower() for x in [
+                    'filter', 'scheduler', 'lightweight', 'wfp', 'qos', 'packet scheduler',
+                    'virtual', 'wi-fi direct', 'direct virtual', 'vmware', 'virtualbox',
+                    'hyper-v', 'vethernet', 'host-only', 'loopback', 'teredo', 'isatap',
+                    'tap-windows', 'wireguard', 'tailscale', 'zerotier', 'npcap', 'pcap',
+                    'bluetooth'
+                ])
+                if not is_excluded and row.OperStatus == 1 and row.Type != 24:
+                    tot_in += row.InOctets
+                    tot_out += row.OutOctets
+            ctypes.windll.iphlpapi.FreeMibTable(pTable)
+            return tot_in, tot_out
+    except Exception:
+        pass
+    return 0, 0
+
+# ==========================================
+# PYINSTALLER SAFE PATHING
+# ==========================================
+def get_app_dir() -> str:
+    """Return correct application directory whether run from source or PyInstaller .exe."""
+    if getattr(sys, "frozen", False):
+        return os.path.dirname(sys.executable)
+    return os.path.dirname(os.path.abspath(__file__))
+
+def get_resource_path(relative_path: str) -> str:
+    """Return absolute path to resource, resolving properly in both dev and PyInstaller one-file bundle."""
+    if hasattr(sys, "_MEIPASS"):
+        bundle_path = os.path.join(sys._MEIPASS, relative_path)
+        if os.path.exists(bundle_path):
+            return bundle_path
+    app_dir_path = os.path.join(get_app_dir(), relative_path)
+    if os.path.exists(app_dir_path):
+        return app_dir_path
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), relative_path)
+
+def _generate_app_icon(path: str) -> None:
+    """Draw a styled high-definition Wi-Fi badge icon and save it as a multi-size .ico file."""
+    sizes = [16, 24, 32, 48, 64, 128, 256]
+    master_sz = 1024
+    img = Image.new("RGBA", (master_sz, master_sz), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+    cx, cy = master_sz // 2, master_sz // 2
+    r = master_sz // 2 - 28
+
+    # Outer soft drop-shadow / glow
+    for i in range(20, 0, -2):
+        alpha = int(45 * (1 - i / 20))
+        draw.ellipse([cx - r - i, cy - r - i, cx + r + i, cy + r + i], outline=(11, 61, 145, alpha), width=3)
+
+    # Base background circle - Deep GIT Navy
+    draw.ellipse([cx - r, cy - r, cx + r, cy + r], fill="#082352")
+
+    # Subtle inner gradient ring
+    r_ring = r - 16
+    draw.ellipse([cx - r_ring, cy - r_ring, cx + r_ring, cy + r_ring], outline=(56, 189, 248, 220), width=12)
+
+    # High definition Wi-Fi arcs
+    arc_configs = [
+        (350, 52, "#60a5fa"),
+        (250, 46, "#38bdf8"),
+        (150, 40, "#2563eb")
+    ]
+    for rad, w, col in arc_configs:
+        x0, y0 = cx - rad, cy - rad + 85
+        x1, y1 = cx + rad, cy + rad + 85
+        draw.arc([x0, y0, x1, y1], start=215, end=325, fill=col, width=w)
+
+    # Center dot
+    dot_r = 58
+    dot_y = cy + 205
+    draw.ellipse([cx - dot_r - 10, dot_y - dot_r - 10, cx + dot_r + 10, dot_y + dot_r + 10], fill=(56, 189, 248, 140))
+    draw.ellipse([cx - dot_r, dot_y - dot_r, cx + dot_r, dot_y + dot_r], fill="#38bdf8")
+    draw.ellipse([cx - 26, dot_y - 26, cx + 26, dot_y + 26], fill="#ffffff")
+
+    images = [img.resize((s, s), Image.Resampling.LANCZOS) for s in sizes]
+    master = images[-1]
+    master.save(path, format="ICO", sizes=[(s, s) for s in sizes], append_images=images)
+
+# ==========================================
+# WINDOWS DPAPI CREDENTIAL ENCRYPTION
+# ==========================================
+class DATA_BLOB(ctypes.Structure):
+    _fields_ = [("cbData", wintypes.DWORD), ("pbData", ctypes.POINTER(ctypes.c_byte))]
+
+def dpapi_encrypt(plain_text: str) -> str:
+    """Encrypt a string using Windows DPAPI (user-specific key)."""
+    if not plain_text:
+        return ""
+    try:
+        data_bytes = plain_text.encode("utf-8")
+        blob_in = DATA_BLOB(len(data_bytes), ctypes.cast(ctypes.create_string_buffer(data_bytes), ctypes.POINTER(ctypes.c_byte)))
+        blob_out = DATA_BLOB()
+        if ctypes.windll.crypt32.CryptProtectData(ctypes.byref(blob_in), "gitwifi", None, None, None, 0, ctypes.byref(blob_out)):
+            encrypted = ctypes.string_at(blob_out.pbData, blob_out.cbData)
+            ctypes.windll.kernel32.LocalFree(blob_out.pbData)
+            return "dpapi:" + base64.b64encode(encrypted).decode("ascii")
+        else:
+            raise RuntimeError("CryptProtectData failed")
+    except Exception as e:
+        print(f"[Crypto] DPAPI encryption error: {e}")
+        # Return empty string instead of leaking plaintext password to disk
+        return ""
+
+def dpapi_decrypt(cipher_text: str) -> str:
+    """Decrypt a DPAPI string. Returns empty string on decryption failure to prevent sending ciphertext."""
+    if not cipher_text:
+        return ""
+    if not cipher_text.startswith("dpapi:"):
+        return cipher_text
+    try:
+        raw_b64 = cipher_text[6:]
+        cipher_bytes = base64.b64decode(raw_b64.encode("ascii"))
+        blob_in = DATA_BLOB(len(cipher_bytes), ctypes.cast(ctypes.create_string_buffer(cipher_bytes), ctypes.POINTER(ctypes.c_byte)))
+        blob_out = DATA_BLOB()
+        if ctypes.windll.crypt32.CryptUnprotectData(ctypes.byref(blob_in), None, None, None, None, 0, ctypes.byref(blob_out)):
+            decrypted = ctypes.string_at(blob_out.pbData, blob_out.cbData).decode("utf-8")
+            ctypes.windll.kernel32.LocalFree(blob_out.pbData)
+            return decrypted
+        else:
+            raise RuntimeError("CryptUnprotectData failed")
+    except Exception as e:
+        print(f"[Crypto] DPAPI decryption error: {e}")
+        # Crucial: Never return ciphertext as plaintext password to avoid sending literal 'dpapi:...' strings
+        return ""
+
+CONFIG_PATH: str = os.path.join(get_app_dir(), "config.json")
+
+DEFAULT_CONFIG = {
+    "profiles": [
+        {"name": "Primary", "username": "", "password": ""}
+    ],
+    "active_profile_index": 0,
+    "user_agent_mode": "Windows Chrome",
+    "custom_user_agent": "",
+    "sound_alerts": True,
+    "desktop_notifications": True,
+    "keepalive_interval": 120,
+    "adaptive_keepalive": True,
+    "auto_reconnect": True,
+    "auto_profile_switching": True,
+    "auto_start_enabled": False,
+    "idle_logout_enabled": False,
+    "idle_logout_minutes": 30,
+    "doh_fallback_enabled": False,
+    "doh_endpoint": "https://1.1.1.1/dns-query",
+    "proxy_enabled": False,
+    "proxy_port": 8888,
+    "proxy_sniff_headers": False,
+    "trusted_portal_hosts": ["172.15.1.2", "www.opn.gitjaipur.com", "opn.gitjaipur.com"],
+    "last_gateway": "",
+    "last_magic": "",
+    "portal_host": "",
+    "portal_port": AppConstants.DEFAULT_PORTAL_PORT,
+    "portal_scheme": "http",
+    "live_monitor_enabled": True,
+    "daily_quota_limit_gb": 10.0,
+    "auto_rotate_on_quota": True,
+    "auto_rotate_on_disconnect": False,
+    "portal_usage_sync": True,
+    "network_mode": "auto",
+    "daily_usage_tracking": {}
+}
+
+SPOOF_USER_AGENTS = {
+    "Windows Chrome": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Windows Edge": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 Edg/124.0.0.0",
+    "Android Pixel (Mobile Spoof)": "Mozilla/5.0 (Linux; Android 14; Pixel 8 Pro) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.6367.82 Mobile Safari/537.36",
+    "iPhone 15 (iOS Spoof)": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4.1 Mobile/15E148 Safari/604.1",
+    "MacBook Safari": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4.1 Safari/605.1.15"
+}
+
+_config_lock = threading.RLock()
+
+def load_settings() -> Dict[str, Any]:
+    cfg = copy.deepcopy(DEFAULT_CONFIG)
+    if os.path.exists(CONFIG_PATH):
+        try:
+            # Bug 24 fix: Use utf-8-sig to automatically handle BOM and standard UTF-8
+            with open(CONFIG_PATH, "r", encoding="utf-8-sig") as f:
+                loaded = json.load(f)
+            if not isinstance(loaded, dict):
+                raise TypeError(f"Config root must be a dict, got {type(loaded).__name__}")
+            for k, v in DEFAULT_CONFIG.items():
+                if k not in loaded:
+                    loaded[k] = copy.deepcopy(v)
+            
+            # Validate types to prevent crashes
+            if not isinstance(loaded.get("profiles"), list):
+                loaded["profiles"] = copy.deepcopy(DEFAULT_CONFIG["profiles"])
+            if not isinstance(loaded.get("trusted_portal_hosts"), list):
+                loaded["trusted_portal_hosts"] = ["172.15.1.2", "www.opn.gitjaipur.com", "opn.gitjaipur.com"]
+            else:
+                for default_host in ("172.15.1.2", "www.opn.gitjaipur.com", "opn.gitjaipur.com"):
+                    if default_host not in loaded["trusted_portal_hosts"]:
+                        loaded["trusted_portal_hosts"].append(default_host)
+            try:
+                loaded["keepalive_interval"] = max(10, int(loaded.get("keepalive_interval", 120)))
+            except (ValueError, TypeError):
+                loaded["keepalive_interval"] = 120
+
+            try:
+                loaded["active_profile_index"] = max(0, int(loaded.get("active_profile_index", 0)))
+            except (ValueError, TypeError):
+                loaded["active_profile_index"] = 0
+
+            try:
+                loaded["daily_quota_limit_gb"] = max(0.1, float(loaded.get("daily_quota_limit_gb", 10.0)))
+            except (ValueError, TypeError):
+                loaded["daily_quota_limit_gb"] = 10.0
+
+            if not isinstance(loaded.get("daily_usage_tracking"), dict):
+                loaded["daily_usage_tracking"] = {}
+            if "portal_usage_sync" not in loaded:
+                loaded["portal_usage_sync"] = True
+            if loaded.get("network_mode") not in ("auto", "campus", "external"):
+                loaded["network_mode"] = "auto"
+
+            cfg = loaded
+        except (json.JSONDecodeError, OSError, TypeError, UnicodeError) as e:
+            print(f"[Config] Error loading settings, backing up and using defaults: {e}")
+            try:
+                bak_path = CONFIG_PATH + f".corrupt.{int(time.time())}.bak"
+                shutil.copy2(CONFIG_PATH, bak_path)
+                print(f"[Config] Corrupt config saved to {bak_path}")
+            except Exception:
+                pass
+
+    # Decrypt passwords in profiles if encrypted; preserve raw ciphertext if decryption fails (Bug 12)
+    for p in cfg.get("profiles", []):
+        if isinstance(p, dict) and "password" in p:
+            raw_val = str(p["password"])
+            decrypted = dpapi_decrypt(raw_val)
+            if not decrypted and raw_val.startswith("dpapi:"):
+                p["password"] = ""
+                p["_password_raw"] = raw_val
+            else:
+                p["password"] = decrypted
+
+    # Decrypt cached magic token if present (N1)
+    if "last_magic" in cfg and isinstance(cfg["last_magic"], str):
+        raw_m = cfg["last_magic"]
+        if raw_m.startswith("dpapi:"):
+            decrypted_m = dpapi_decrypt(raw_m)
+            if not decrypted_m:
+                cfg["_last_magic_raw"] = raw_m
+                cfg["last_magic"] = ""
+            else:
+                cfg["last_magic"] = decrypted_m
+
+    return cfg
+
+def save_settings(cfg: Dict[str, Any]) -> None:
+    tmp_path = CONFIG_PATH + ".tmp"
+    try:
+        with _config_lock:
+            # Create a deep copy under lock to encrypt passwords on disk without modifying in-memory plaintext
+            disk_cfg = copy.deepcopy(cfg)
+            for p in disk_cfg.get("profiles", []):
+                if isinstance(p, dict) and "password" in p:
+                    pwd = p["password"]
+                    if not pwd and p.get("_password_raw"):
+                        # Keep existing ciphertext if password was not changed/empty
+                        p["password"] = p["_password_raw"]
+                    elif pwd:
+                        enc = dpapi_encrypt(pwd)
+                        if enc:
+                            p["password"] = enc
+                        elif p.get("_password_raw"):
+                            # Bug 12 fix: If encrypt failed transiently, preserve existing valid ciphertext
+                            p["password"] = p["_password_raw"]
+                    p.pop("_password_raw", None)
+
+            # N1: Encrypt last_magic before saving to disk
+            if "last_magic" in disk_cfg and disk_cfg["last_magic"]:
+                enc_m = dpapi_encrypt(disk_cfg["last_magic"])
+                disk_cfg["last_magic"] = enc_m if enc_m else disk_cfg.get("_last_magic_raw", "")
+            else:
+                # Bug 59 fix: If last_magic is empty (e.g. user logged out or session ended), do NOT resurrect _last_magic_raw
+                disk_cfg["last_magic"] = ""
+            disk_cfg.pop("_last_magic_raw", None)
+
+            with open(tmp_path, "w", encoding="utf-8") as f:
+                json.dump(disk_cfg, f, indent=4)
+            os.replace(tmp_path, CONFIG_PATH)
+    except Exception as e:
+        print(f"[Config] Error saving config: {e}")
+
+# ==========================================
+# WINDOWS STARTUP & AUTOSTART MANAGEMENT
+# ==========================================
+STARTUP_DIR = os.path.join(os.environ.get("APPDATA", ""), r"Microsoft\Windows\Start Menu\Programs\Startup")
+STARTUP_LNK = os.path.join(STARTUP_DIR, "GITwifi.lnk")
+STALE_STARTUP_LNK = os.path.join(STARTUP_DIR, "Launch_GITwifi.bat.lnk")
+RUN_REG_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
+RUN_REG_NAME = "GITwifi"
+APPROVED_STARTUP_KEY = r"Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\StartupFolder"
+APPROVED_RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run"
+
+def is_auto_start_registered() -> bool:
+    """Check if GITwifi is registered to start automatically on Windows boot and not disabled in Task Manager."""
+    # 1. Check Windows Startup folder shortcut
+    if os.path.exists(STARTUP_LNK):
+        if HAS_WINREG:
+            try:
+                with winreg.OpenKey(winreg.HKEY_CURRENT_USER, APPROVED_STARTUP_KEY, 0, winreg.KEY_READ) as key:
+                    val, _ = winreg.QueryValueEx(key, "GITwifi.lnk")
+                    if isinstance(val, (bytes, bytearray)) and len(val) > 0 and val[0] == 3:
+                        return False  # Explicitly disabled by user in Task Manager
+            except OSError:
+                pass
+        return True
+
+    # 2. Check legacy / alternative HKCU Run registry key
+    if HAS_WINREG:
+        try:
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_REG_KEY, 0, winreg.KEY_READ) as key:
+                val, _ = winreg.QueryValueEx(key, RUN_REG_NAME)
+                if val:
+                    raw_path = val.split('"')[1] if '"' in val else val.split()[0]
+                    if os.path.exists(raw_path):
+                        try:
+                            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, APPROVED_RUN_KEY, 0, winreg.KEY_READ) as akey:
+                                aval, _ = winreg.QueryValueEx(akey, RUN_REG_NAME)
+                                if isinstance(aval, (bytes, bytearray)) and len(aval) > 0 and aval[0] == 3:
+                                    return False
+                        except OSError:
+                            pass
+                        return True
+        except (FileNotFoundError, OSError):
+            pass
+    return False
+
+def set_auto_start_registered(enable: bool) -> bool:
+    """Register or remove GITwifi shortcut in the Windows Startup folder with --minimized flag."""
+    try:
+        if enable:
+            # 1. Determine target binary / script
+            if getattr(sys, "frozen", False):
+                target_exe = sys.executable
+                args = "--minimized"
+                work_dir = os.path.dirname(sys.executable)
+            else:
+                installed_exe = os.path.join(os.environ.get("LOCALAPPDATA", ""), "GITwifi", "GITwifi.exe")
+                dist_exe = os.path.join(get_app_dir(), "dist", "GITwifi.exe")
+                if os.path.exists(installed_exe):
+                    target_exe = installed_exe
+                    args = "--minimized"
+                    work_dir = os.path.dirname(installed_exe)
+                elif os.path.exists(dist_exe):
+                    target_exe = dist_exe
+                    args = "--minimized"
+                    work_dir = os.path.dirname(dist_exe)
+                else:
+                    py_exe = sys.executable
+                    pyw_exe = re.sub(r'python\.exe$', 'pythonw.exe', py_exe, flags=re.IGNORECASE)
+                    if not os.path.exists(pyw_exe):
+                        pyw_exe = py_exe
+                    target_exe = pyw_exe
+                    args = f'"{os.path.abspath(__file__)}" --minimized'
+                    work_dir = get_app_dir()
+
+            icon_path = get_resource_path("app_icon.ico")
+            if not os.path.exists(icon_path):
+                icon_path = target_exe
+
+            os.makedirs(STARTUP_DIR, exist_ok=True)
+
+            ps_script = (
+                f"$ws = New-Object -ComObject WScript.Shell; "
+                f"$s = $ws.CreateShortcut('{STARTUP_LNK}'); "
+                f"$s.TargetPath = '{target_exe}'; "
+                f"$s.Arguments = '{args}'; "
+                f"$s.WorkingDirectory = '{work_dir}'; "
+                f"$s.WindowStyle = 7; "
+                f"$s.Description = 'GITwifi Suite - Campus Wi-Fi Authentication'; "
+                f"if (Test-Path '{icon_path}') {{ $s.IconLocation = '{icon_path},0' }}; "
+                f"$s.Save(); "
+                f"Remove-ItemProperty -Path 'HKCU:\\{APPROVED_STARTUP_KEY}' -Name 'GITwifi.lnk' -ErrorAction SilentlyContinue; "
+                f"Remove-ItemProperty -Path 'HKCU:\\{APPROVED_STARTUP_KEY}' -Name 'Launch_GITwifi.bat.lnk' -ErrorAction SilentlyContinue; "
+                f"Remove-ItemProperty -Path 'HKCU:\\{APPROVED_RUN_KEY}' -Name '{RUN_REG_NAME}' -ErrorAction SilentlyContinue; "
+                f"Remove-ItemProperty -Path 'HKCU:\\{RUN_REG_KEY}' -Name '{RUN_REG_NAME}' -ErrorAction SilentlyContinue;"
+            )
+            subprocess.run(
+                ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps_script],
+                creationflags=CREATE_NO_WINDOW,
+                check=False
+            )
+            if os.path.exists(STALE_STARTUP_LNK):
+                try:
+                    os.remove(STALE_STARTUP_LNK)
+                except OSError:
+                    pass
+        else:
+            if os.path.exists(STARTUP_LNK):
+                try:
+                    os.remove(STARTUP_LNK)
+                except OSError:
+                    pass
+            if os.path.exists(STALE_STARTUP_LNK):
+                try:
+                    os.remove(STALE_STARTUP_LNK)
+                except OSError:
+                    pass
+            if HAS_WINREG:
+                try:
+                    with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_REG_KEY, 0, winreg.KEY_SET_VALUE) as key:
+                        winreg.DeleteValue(key, RUN_REG_NAME)
+                except (FileNotFoundError, OSError):
+                    pass
+                try:
+                    with winreg.OpenKey(winreg.HKEY_CURRENT_USER, APPROVED_RUN_KEY, 0, winreg.KEY_SET_VALUE) as key:
+                        winreg.DeleteValue(key, RUN_REG_NAME)
+                except (FileNotFoundError, OSError):
+                    pass
+                try:
+                    with winreg.OpenKey(winreg.HKEY_CURRENT_USER, APPROVED_STARTUP_KEY, 0, winreg.KEY_SET_VALUE) as key:
+                        winreg.DeleteValue(key, "GITwifi.lnk")
+                except (FileNotFoundError, OSError):
+                    pass
+        return True
+    except Exception as e:
+        print(f"[Autostart] Configuration error: {e}")
+        return False
+
+# ==========================================
+# WINDOWS USER IDLE TELEMETRY
+# ==========================================
+class LASTINPUTINFO(ctypes.Structure):
+    _fields_ = [
+        ("cbSize", wintypes.UINT),
+        ("dwTime", wintypes.DWORD)
+    ]
+
+def get_system_idle_seconds() -> float:
+    """Return seconds since user last pressed a key or moved the mouse using Windows API."""
+    try:
+        lii = LASTINPUTINFO()
+        lii.cbSize = ctypes.sizeof(LASTINPUTINFO)
+        if ctypes.windll.user32.GetLastInputInfo(ctypes.byref(lii)):
+            if hasattr(ctypes.windll.kernel32, "GetTickCount64"):
+                ctypes.windll.kernel32.GetTickCount64.restype = ctypes.c_uint64
+                now_ticks = ctypes.windll.kernel32.GetTickCount64()
+            else:
+                ctypes.windll.kernel32.GetTickCount.restype = ctypes.c_uint32
+                now_ticks = ctypes.windll.kernel32.GetTickCount()
+            last_input = lii.dwTime & 0xFFFFFFFF
+            millis = (now_ticks & 0xFFFFFFFF) - last_input
+            if millis < 0:
+                millis += 0x100000000
+            return max(0.0, float(millis) / 1000.0)
+    except Exception:
+        pass
+    return 0.0
+
+def get_hotspot_bind_ip(campus_ip: Optional[str] = None) -> str:
+    """
+    Find safe IP for hotspot proxy to avoid binding to open campus IP (0.0.0.0).
+    Prefers virtual adapter / hotspot private subnets (192.168.137.x or other 192.168.x.x / 172.16-31.x.x).
+    Falls back to 127.0.0.1 if no separate local interface exists.
+    """
+    try:
+        if not campus_ip:
+            s = None
+            try:
+                s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                s.connect(("8.8.8.8", 80))
+                campus_ip = s.getsockname()[0]
+            except (socket.error, OSError):
+                pass
+            finally:
+                if s:
+                    try:
+                        s.close()
+                    except Exception:
+                        pass
+
+        hostname = socket.gethostname()
+        all_ips = socket.gethostbyname_ex(hostname)[2]
+        
+        # 1. Look for Windows Mobile Hotspot default subnet (192.168.137.x)
+        for ip in all_ips:
+            if ip.startswith("192.168.137."):
+                return ip
+
+        # 2. Look for any private non-campus IP (including 10.x.x.x)
+        for ip in all_ips:
+            if ip != campus_ip and (ip.startswith("192.168.") or ip.startswith("10.") or re.match(r"172\.(1[6-9]|2\d|3[01])\.", ip)):
+                return ip
+
+    except (socket.error, OSError):
+        pass
+
+    return "127.0.0.1"
+
+_cached_gateway: Optional[str] = None
+_cached_gateway_time: float = 0.0
+
+def get_default_gateway(force: bool = False) -> Optional[str]:
+    """Retrieve Windows default IPv4 gateway via 'route print' selecting the route with lowest metric (ignoring virtual/hotspot/APIPA routes - Bug 20). Cached for 5s to eliminate process lag."""
+    global _cached_gateway, _cached_gateway_time
+    now = time.time()
+    if not force and _cached_gateway is not None and (now - _cached_gateway_time) < 5.0:
+        return _cached_gateway
+
+    best_gw: Optional[str] = None
+    lowest_metric: float = float("inf")
+    try:
+        out = subprocess.check_output(
+            ["route", "print", "-4", "0.0.0.0"],
+            text=True, stderr=subprocess.DEVNULL, creationflags=CREATE_NO_WINDOW
+        )
+        for line in out.splitlines():
+            parts = line.split()
+            # route print row format: Network   Netmask   Gateway   Interface   Metric
+            if len(parts) >= 5 and parts[0] == "0.0.0.0" and parts[1] == "0.0.0.0":
+                gw = parts[2]
+                iface = parts[3]
+                try:
+                    metric = int(parts[4])
+                except ValueError:
+                    metric = 9999
+                # Bug 20 fix: Exclude APIPA, loopback, and local Windows hotspot subnet (192.168.137.x)
+                if not re.fullmatch(r"\d+\.\d+\.\d+\.\d+", gw) or gw == "0.0.0.0":
+                    continue
+                if gw.startswith("127.") or gw.startswith("169.254.") or gw == "192.168.137.1":
+                    continue
+                if iface.startswith("127.") or iface.startswith("169.254.") or iface.startswith("192.168.137."):
+                    continue
+                if metric < lowest_metric:
+                    lowest_metric = metric
+                    best_gw = gw
+    except Exception:
+        pass
+    _cached_gateway = best_gw
+    _cached_gateway_time = now
+    return best_gw
+
+
+# ==========================================
+# PROXY SERVER (HTTP CONNECT & TUNNELING)
+# ==========================================
+class HotspotProxyServer:
+    def __init__(self, host: Optional[str] = None, port: int = AppConstants.DEFAULT_PROXY_PORT, logger: Optional[Callable[[str], None]] = None, campus_ip: Optional[str] = None):
+        self.campus_ip: Optional[str] = campus_ip
+        self.explicit_host: Optional[str] = host
+        self.host: str = host or get_hotspot_bind_ip(campus_ip)
+        self.port: int = port
+        self.logger: Optional[Callable[[str], None]] = logger
+        self.running: bool = False
+        self.server_sock: Optional[socket.socket] = None
+        self.thread: Optional[threading.Thread] = None
+        self.active_sockets: Set[socket.socket] = set()
+        self.sockets_lock: threading.Lock = threading.Lock()
+        self.host_lock: threading.Lock = threading.Lock()
+        self.active_clients: int = 0
+        self.max_clients: int = 64
+        self.clients_lock: threading.Lock = threading.Lock()
+        # Feature 3: Data Usage & Bandwidth Metering (Atomic bytes counters)
+        self.bytes_sent: int = 0
+        self.bytes_recv: int = 0
+        self.stats_lock: threading.Lock = threading.Lock()
+        # Diagnostic Mode: Plaintext HTTP/CONNECT traffic header sniffing
+        self.sniff_headers: bool = False
+
+    def log(self, msg: str) -> None:
+        if self.logger:
+            self.logger(f"[Proxy] {msg}")
+
+    def update_bind_host(self, campus_ip: Optional[str] = None) -> None:
+        with self.host_lock:
+            self.campus_ip = campus_ip
+            old_host = self.host
+            if self.explicit_host:
+                self.host = self.explicit_host
+            else:
+                self.host = get_hotspot_bind_ip(campus_ip)
+            new_host = self.host
+
+        # Bug 31 fix: If bind host changed while proxy is running, restart listener on the new IP
+        if self.running and old_host and new_host and old_host != new_host:
+            self.log(f"[Proxy] Hotspot interface changed ({old_host} -> {new_host}). Rebinding proxy...")
+            self.stop()
+            self.start()
+
+    def _register_socket(self, sock: socket.socket) -> None:
+        with self.sockets_lock:
+            self.active_sockets.add(sock)
+
+    def _unregister_socket(self, sock: socket.socket) -> None:
+        with self.sockets_lock:
+            self.active_sockets.discard(sock)
+
+    def start(self) -> bool:
+        if self.running:
+            return True
+        try:
+            if not isinstance(self.port, int) or not (1 <= self.port <= 65535):
+                raise ValueError(f"Proxy port {self.port} is outside valid range (1-65535)")
+            self.update_bind_host(self.campus_ip)
+            with self.host_lock:
+                bind_ip = self.host
+            # Retry loop for TIME_WAIT / EADDRINUSE (Bug 17)
+            bound = False
+            for attempt in range(1, 4):
+                try:
+                    # Recreate socket on each attempt to ensure clean state after bind failure
+                    if self.server_sock:
+                        try:
+                            self.server_sock.close()
+                        except Exception:
+                            pass
+                    self.server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+                        self.server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+                    else:
+                        self.server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                    self.server_sock.bind((bind_ip, self.port))
+                    bound = True
+                    break
+                except OSError as be:
+                    # Windows WSAEADDRINUSE is 10048; standard errno is 48 or 98
+                    if getattr(be, "winerror", None) == 10048 or getattr(be, "errno", None) in (48, 98, 10048):
+                        if attempt < 3:
+                            self.log(f"Proxy port {self.port} in TIME_WAIT / in use. Retrying bind in 1s (attempt {attempt}/3)...")
+                            time.sleep(1.0)
+                            continue
+                    raise be
+
+            if not bound:
+                raise OSError(f"Could not bind to {bind_ip}:{self.port} after retries")
+
+            self.server_sock.listen(50)
+            self.server_sock.settimeout(1.0)
+            self.running = True
+            self.thread = threading.Thread(target=self._listen_loop, args=(self.server_sock,), daemon=True)
+            self.thread.start()
+            # N2: Accurate logging on loopback fallback vs interface bind
+            if bind_ip == "127.0.0.1":
+                self.log(f"Sharing Proxy active on loopback only ({bind_ip}:{self.port}) (hotspot clients won't be able to connect)")
+            else:
+                self.log(f"Sharing Proxy securely active on {bind_ip}:{self.port}")
+            return True
+        except Exception as e:
+            self.running = False
+            self.log(f"Failed to start proxy on {getattr(self, 'host', 'unknown')}:{self.port}: {e}")
+            if self.server_sock:
+                try:
+                    self.server_sock.close()
+                except Exception:
+                    pass
+                self.server_sock = None
+            return False
+
+    def stop(self) -> None:
+        self.running = False
+        with self.sockets_lock:
+            for s in list(self.active_sockets):
+                try:
+                    s.shutdown(socket.SHUT_RDWR)
+                except (socket.error, OSError):
+                    pass
+                try:
+                    s.close()
+                except (socket.error, OSError):
+                    pass
+            self.active_sockets.clear()
+
+        if self.server_sock:
+            try:
+                self.server_sock.close()
+            except (socket.error, OSError):
+                pass
+            self.server_sock = None
+        self.log("Proxy stopped and active tunnels terminated.")
+
+    def _listen_loop(self, sock: socket.socket) -> None:
+        while self.running:
+            try:
+                client_sock, addr = sock.accept()
+            except socket.timeout:
+                continue
+            except (socket.error, OSError) as e:
+                # Bug 3 fix: Only terminate listen loop if the listening server socket itself is closed or invalidated
+                if not self.running or sock.fileno() == -1:
+                    break
+                time.sleep(0.05)
+                continue
+
+            try:
+                with self.clients_lock:
+                    if self.active_clients >= self.max_clients:
+                        try:
+                            client_sock.sendall(b"HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\nProxy client limit reached.\r\n")
+                        except Exception:
+                            pass
+                        try:
+                            client_sock.close()
+                        except Exception:
+                            pass
+                        continue
+                    self.active_clients += 1
+                threading.Thread(target=self._client_worker_wrapper, args=(client_sock, addr), daemon=True).start()
+            except Exception as client_err:
+                try:
+                    client_sock.close()
+                except Exception:
+                    pass
+
+    def _client_worker_wrapper(self, client_sock: socket.socket, addr: Any) -> None:
+        try:
+            self._handle_client(client_sock, addr)
+        finally:
+            with self.clients_lock:
+                self.active_clients = max(0, self.active_clients - 1)
+
+    def _parse_target_host_port(self, target: str, default_port: int = 80) -> tuple[str, int]:
+        if target.startswith("https://"):
+            default_port = 443
+        raw = target if (target.startswith("http://") or target.startswith("https://")) else ("http://" + target)
+        try:
+            parsed = urlsplit(raw)
+            host = parsed.hostname or target.split("/")[0]
+            port = parsed.port or default_port
+            return host, port
+        except Exception:
+            host = target.split("/")[0]
+            port = default_port
+            if ":" in host:
+                parts = host.rsplit(":", 1)
+                try:
+                    port = int(parts[1])
+                    host = parts[0].strip("[]")
+                except ValueError:
+                    pass
+            return host, port
+
+    def _strip_proxy_headers(self, raw_request: bytes, client_ip: str = "Client") -> bytes:
+        if b"\r\n\r\n" not in raw_request:
+            return raw_request
+        header_blob, body = raw_request.split(b"\r\n\r\n", 1)
+        lines = header_blob.split(b"\r\n")
+        
+        # Convert absolute URI in the request line to relative path (e.g., GET http://example.com/foo;jsessionid=1?x=2 -> GET /foo;jsessionid=1?x=2)
+        first_line_parts = lines[0].split(b" ", 2)
+        req_method = "GET"
+        req_path = "/"
+        if len(first_line_parts) == 3:
+            method, target_bytes, proto = first_line_parts
+            req_method = method.decode("latin1", errors="ignore")
+            target_str = target_bytes.decode("latin1", errors="ignore")
+            req_path = target_str
+            if target_str.startswith("http://") or target_str.startswith("https://"):
+                parsed = urlsplit(target_str)
+                path = parsed.path or "/"
+                if parsed.query:
+                    path += "?" + parsed.query
+                req_path = path
+                lines[0] = method + b" " + path.encode("latin1") + b" " + proto
+
+        # Bug 4: Two-pass header processing for order-independent WebSocket detection
+        is_websocket = False
+        sniffed_host = ""
+        sniffed_ua = ""
+        for line in lines[1:]:
+            lower = line.lower()
+            if lower.startswith(b"upgrade:") and b"websocket" in lower:
+                is_websocket = True
+            elif lower.startswith(b"host:"):
+                sniffed_host = line.split(b":", 1)[1].strip().decode("latin1", errors="ignore")
+            elif lower.startswith(b"user-agent:"):
+                sniffed_ua = line.split(b":", 1)[1].strip().decode("latin1", errors="ignore")
+
+        # Diagnostic Mode: Sniff HTTP metadata (Bug 38 fix: scrub query parameters to protect user credentials/tokens)
+        if self.sniff_headers:
+            host_display = sniffed_host or "unknown-host"
+            ua_display = f" | UA: {sniffed_ua}" if sniffed_ua else ""
+            clean_path = req_path.split("?")[0] if "?" in req_path else req_path
+            self.log(f"[Sniff] {client_ip} -> {req_method} http://{host_display}{clean_path}{ua_display}")
+
+        cleaned_lines = [lines[0]]
+        for line in lines[1:]:
+            lower = line.lower()
+            if (lower.startswith(b"proxy-connection:")
+                    or lower.startswith(b"proxy-authenticate:")
+                    or lower.startswith(b"proxy-authorization:")):
+                continue
+            if lower.startswith(b"connection:") and not is_websocket:
+                continue
+            cleaned_lines.append(line)
+
+        if not is_websocket:
+            cleaned_lines.append(b"Connection: close")
+        return b"\r\n".join(cleaned_lines) + b"\r\n\r\n" + body
+
+    def _is_safe_target(self, host: str, port: int) -> Optional[List[Tuple[str, int]]]:
+        """
+        Prevent open relay / SSRF exploitation against loopback, private RFC1918, link-local,
+        unspecified (0.0.0.0), sensitive service ports, and the host PC's own interface IPs.
+        Returns list of safe (resolved_ip, port) candidates, or None if unsafe/blocked. (Bug 6, Bug 33)
+        """
+        try:
+            if port in (22, 23, 25, 445, 139, 3389, self.port):
+                return None
+            
+            # Collect host machine's own local interface IPs to prevent hotspot clients from accessing host services
+            local_host_ips = {"127.0.0.1", "::1"}
+            try:
+                for info in socket.getaddrinfo(socket.gethostname(), None):
+                    local_host_ips.add(info[4][0])
+            except Exception:
+                pass
+
+            addrs = socket.getaddrinfo(host, port, socket.AF_UNSPEC, socket.SOCK_STREAM)
+            safe_targets = []
+            for family, socktype, proto, canonname, sockaddr in addrs:
+                ip_str = sockaddr[0]
+                if ip_str in local_host_ips:
+                    return None
+                ip_obj = ipaddress.ip_address(ip_str)
+                # Check for loopback, IPv4-mapped IPv6, link-local, unspecified, reserved, or private IPs
+                if ip_obj.is_loopback or ip_obj.is_link_local or ip_obj.is_unspecified or ip_obj.is_reserved or ip_obj.is_private:
+                    return None
+                if isinstance(ip_obj, ipaddress.IPv6Address) and ip_obj.ipv4_mapped:
+                    mapped = ip_obj.ipv4_mapped
+                    if mapped.is_loopback or mapped.is_link_local or mapped.is_unspecified or mapped.is_reserved or mapped.is_private:
+                        return None
+                    if str(mapped) in local_host_ips:
+                        return None
+                target_cand = (ip_str, port)
+                if target_cand not in safe_targets:
+                    safe_targets.append(target_cand)
+            return safe_targets if safe_targets else None
+        except Exception:
+            return None
+
+    def _handle_client(self, client_sock: socket.socket, addr: Any) -> None:
+        remote_sock = None
+        try:
+            request = b""
+            # Bug 36 fix: Add an overall header read timeout deadline (15s) to guard against slowloris-style hangs
+            header_deadline = time.monotonic() + 15.0
+            while b"\r\n\r\n" not in request and len(request) < AppConstants.HEADER_BUFFER_MAX:
+                remaining = header_deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                client_sock.settimeout(min(AppConstants.SELECT_POLL_TIMEOUT, remaining))
+                chunk = client_sock.recv(2048)
+                if not chunk:
+                    break
+                request += chunk
+
+            if not request or b"\r\n" not in request:
+                client_sock.close()
+                return
+
+            # Bug 2: Guard against partial requests lacking \r\n\r\n
+            if b"\r\n\r\n" not in request:
+                client_sock.sendall(b"HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\nPartial or malformed HTTP request.\r\n")
+                client_sock.close()
+                return
+
+            header_part, trailing_bytes = request.split(b"\r\n\r\n", 1)
+            first_line = header_part.decode("latin1", errors="ignore").split("\r\n")[0]
+            parts = first_line.split()
+            if len(parts) < 3:
+                client_sock.sendall(b"HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\nMalformed HTTP request.\r\n")
+                client_sock.close()
+                return
+
+            method, target, _ = parts
+            client_ip = addr[0] if isinstance(addr, (list, tuple)) and addr else str(addr)
+
+            if method == "CONNECT":
+                try:
+                    host, port = self._parse_target_host_port(target, default_port=443)
+                except (UnicodeError, ValueError):
+                    client_sock.sendall(b"HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\nInvalid CONNECT destination.\r\n")
+                    client_sock.close()
+                    return
+
+                if self.sniff_headers:
+                    self.log(f"[Sniff] {client_ip} -> CONNECT {host}:{port} (Encrypted Tunnel)")
+
+                safe_targets = self._is_safe_target(host, port)
+                if not safe_targets:
+                    client_sock.sendall(b"HTTP/1.1 403 Forbidden\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\nAccess to local/restricted target forbidden.\r\n")
+                    client_sock.close()
+                    return
+                # Bug 33 fix: Dual-stack fallback across all resolved safe addresses
+                conn_err = None
+                for cand in safe_targets:
+                    try:
+                        remote_sock = socket.create_connection(cand, timeout=AppConstants.SOCKET_CONNECT_TIMEOUT)
+                        break
+                    except Exception as ce:
+                        conn_err = ce
+                        continue
+                if not remote_sock:
+                    client_sock.sendall(f"HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\nUpstream connect failed: {conn_err}\r\n".encode("utf-8"))
+                    client_sock.close()
+                    return
+
+                client_sock.sendall(b"HTTP/1.1 200 Connection Established\r\n\r\n")
+                # Forward any bytes client sent immediately after CONNECT header
+                if trailing_bytes:
+                    remote_sock.sendall(trailing_bytes)
+                    with self.stats_lock:
+                        self.bytes_sent += len(trailing_bytes)
+            else:
+                try:
+                    host, port = self._parse_target_host_port(target, default_port=80)
+                except (UnicodeError, ValueError):
+                    client_sock.sendall(b"HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\nInvalid target host.\r\n")
+                    client_sock.close()
+                    return
+
+                sanitized_request = self._strip_proxy_headers(request, client_ip=client_ip)
+                safe_targets = self._is_safe_target(host, port)
+                if not safe_targets:
+                    client_sock.sendall(b"HTTP/1.1 403 Forbidden\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\nAccess to local/restricted target forbidden.\r\n")
+                    client_sock.close()
+                    return
+                # Bug 33 fix: Dual-stack fallback across all resolved safe addresses
+                conn_err = None
+                for cand in safe_targets:
+                    try:
+                        remote_sock = socket.create_connection(cand, timeout=AppConstants.SOCKET_CONNECT_TIMEOUT)
+                        break
+                    except Exception as ce:
+                        conn_err = ce
+                        continue
+                if not remote_sock:
+                    client_sock.sendall(f"HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\nUpstream connect failed: {conn_err}\r\n".encode("utf-8"))
+                    client_sock.close()
+                    return
+                remote_sock.sendall(sanitized_request)
+                with self.stats_lock:
+                    self.bytes_sent += len(sanitized_request)
+
+            self._register_socket(client_sock)
+            if remote_sock:
+                self._register_socket(remote_sock)
+            self._pipe_sockets(client_sock, remote_sock)
+        except (socket.error, OSError, TimeoutError, UnicodeError):
+            pass
+        finally:
+            for s in (client_sock, remote_sock):
+                if s:
+                    self._unregister_socket(s)
+                    try:
+                        s.close()
+                    except (socket.error, OSError):
+                        pass
+
+    def _pipe_sockets(self, s1: socket.socket, s2: socket.socket) -> None:
+        s1.settimeout(30)
+        s2.settimeout(30)
+        active_sockets = [s1, s2]
+        idle_ticks = 0
+        try:
+            while self.running and active_sockets:
+                r, _, _ = select.select(active_sockets, [], [], AppConstants.SELECT_POLL_TIMEOUT)
+                if not r:
+                    idle_ticks += 1
+                    if idle_ticks >= 30:  # 30 × 10s = 5 minutes idle → close pipe
+                        return
+                    continue
+                idle_ticks = 0
+                for sock in r:
+                    other = s2 if sock is s1 else s1
+                    try:
+                        data = sock.recv(16384)
+                        if not data:
+                            # Half-close: socket closed by peer, send SHUT_WR to other and stop reading from this socket
+                            if sock in active_sockets:
+                                active_sockets.remove(sock)
+                            try:
+                                other.shutdown(socket.SHUT_WR)
+                            except (socket.error, OSError):
+                                return
+                            if not active_sockets:
+                                return
+                            continue
+                        other.sendall(data)
+                        with self.stats_lock:
+                            if sock is s1:
+                                self.bytes_sent += len(data)
+                            else:
+                                self.bytes_recv += len(data)
+                    except (socket.error, OSError):
+                        return
+        except (socket.error, OSError):
+            pass
+
+
+# ==========================================
+# AUTHENTICATION & FORTIGATE ENGINE
+# ==========================================
+class GitWifiCore:
+    def __init__(self, status_cb=None, log_cb=None, profile_switch_cb=None, notify_cb=None):
+        self.config = load_settings()
+        self.status_cb = status_cb
+        self.log_cb = log_cb
+        self.profile_switch_cb = profile_switch_cb
+        self.notify_cb = notify_cb
+        self.session = requests.Session()
+        def _unsecure_cookie_hook(resp, *args, **kwargs):
+            try:
+                for c in resp.cookies:
+                    c.secure = False
+                for c in self.session.cookies:
+                    c.secure = False
+            except Exception:
+                pass
+        self.session.hooks["response"].append(_unsecure_cookie_hook)
+        self.status = "Disconnected"
+        self.running = False
+        self.worker_thread = None
+        self.keepalive_url = None
+        self.current_magic = None
+        self.portal_host = self.config.get("portal_host") or "-"
+        live_gw = get_default_gateway()
+        self.gateway_ip = live_gw or self.config.get("last_gateway") or "-"
+        self.portal_port = self.config.get("portal_port") or AppConstants.DEFAULT_PORTAL_PORT
+        self.portal_scheme = self.config.get("portal_scheme") or "http"
+        self.portal_type: str = "auto"
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect(("8.8.8.8", 80))
+            self.local_ip = s.getsockname()[0]
+            s.close()
+        except Exception:
+            self.local_ip = "-"
+        self.session_start = None
+        self.user_signed_out = False
+        self.last_connected_ssid: Optional[str] = None
+        self.last_connected_profile: Optional[str] = None
+        self.session_lock: threading.RLock = threading.RLock()
+        self.failed_login_attempts: int = 0
+        self.max_login_retries: int = 5
+        self.error_backoff_seconds: float = 30.0
+
+        self.state_lock = threading.RLock()
+        self.cycle_event = threading.Event()
+
+        # Adaptive Keepalive Tuning state
+        self.current_keepalive_interval: int = max(10, int(self.config.get("keepalive_interval", 120)))
+        self.keepalive_consecutive_successes: int = 0
+        self.keepalive_consecutive_failures: int = 0
+
+        # Quota Tracking & Multi-Account Rotation state
+        self.quota_lock = threading.RLock()
+        self.last_quota_check_io = get_system_network_io()
+        self.last_quota_check_time = time.time()
+        self.last_quota_save_time = time.time()
+        self.quota_warning_sent_80 = set()
+        self.quota_warning_sent_95 = set()
+        self.is_auto_rotating = False
+
+        # Direct Portal Usage Sync State (Real-time Campus Quota & Data Remaining)
+        self.portal_session_id: Optional[str] = None
+        self.portal_usage_data: Optional[Dict[str, Any]] = None
+        self.portal_usage_source: str = "local"
+        self.last_portal_usage_sync: float = 0.0
+        self.portal_usage_sync_lock = threading.RLock()
+        self._cached_ssid: Optional[str] = None
+        self._cached_ssid_time: float = 0.0
+
+        self.proxy_server = HotspotProxyServer(port=self.config.get("proxy_port", 8888), logger=self.log)
+        self.proxy_server.sniff_headers = self.config.get("proxy_sniff_headers", False)
+
+    def update_config(self, key: str, value: Any, save: bool = True) -> None:
+        """Thread-safe update of core configuration dictionary with optional disk persistence (Bug 13)."""
+        with _config_lock:
+            self.config[key] = value
+            if save:
+                save_settings(self.config)
+
+    def _unsecure_portal_cookies(self) -> None:
+        """
+        OPNsense captive portals issue PHPSESSID with secure=True even over plaintext HTTP.
+        RFC 6265 prevents requests.Session from transmitting secure cookies over http://.
+        Stripping secure=True ensures the PHP session cookie is sent on keepalive requests,
+        preventing server-side 30-40s session termination.
+        """
+        try:
+            with self.session_lock:
+                for c in self.session.cookies:
+                    c.secure = False
+        except Exception:
+            pass
+
+    def get_verify_tls(self, url: Optional[str] = None) -> Union[bool, str]:
+        """
+        Return CA bundle path or TLS verification boolean (Bug 5).
+        Captive portals typically use self-signed certificates or private CAs;
+        if custom_ca_bundle is configured in settings and exists on disk, it is used.
+        """
+        ca_bundle = self.config.get("custom_ca_bundle")
+        if ca_bundle and os.path.isfile(ca_bundle):
+            return ca_bundle
+        return self.config.get("verify_tls", False)
+
+    def log(self, text):
+        ts = time.strftime("[%H:%M:%S] ")
+        line = ts + text
+        print(line)
+        if self.log_cb:
+            self.log_cb(line)
+
+    def set_status(self, new_status):
+        with self.state_lock:
+            if self.status == new_status:
+                return
+            self.status = new_status
+        if self.status_cb:
+            self.status_cb(new_status)
+
+    def alert(self, kind: str) -> None:
+        if not HAS_WINSOUND or not self.config.get("sound_alerts", True):
+            return
+        try:
+            if kind == "ok":
+                winsound.MessageBeep(winsound.MB_OK)
+            elif kind == "fail":
+                winsound.MessageBeep(winsound.MB_ICONHAND)
+            elif kind == "warning":
+                winsound.MessageBeep(winsound.MB_ICONEXCLAMATION)
+        except Exception:
+            pass
+
+    def notify(self, title: str, message: str) -> None:
+        """Dispatch desktop notification via UI callback or log."""
+        self.log(f"[Notification] {title}: {message}")
+        if self.notify_cb and callable(self.notify_cb):
+            try:
+                self.notify_cb(title, message)
+            except Exception as e:
+                self.log(f"[Notification] Dispatch error: {e}")
+
+    def is_online(self) -> bool:
+        return self.status in ("Connected", "External Network (Online)")
+
+    def get_active_ssid(self) -> Optional[str]:
+        now = time.time()
+        if getattr(self, "_cached_ssid", None) is not None and (now - getattr(self, "_cached_ssid_time", 0.0)) < 8.0:
+            return self._cached_ssid
+        try:
+            out = subprocess.check_output(
+                ["netsh", "wlan", "show", "interfaces"],
+                text=True, stderr=subprocess.DEVNULL, creationflags=CREATE_NO_WINDOW
+            )
+            for line in out.splitlines():
+                line_str = line.strip()
+                if ":" in line_str:
+                    k, v = [x.strip() for x in line_str.split(":", 1)]
+                    k_lower = k.lower()
+                    if "ssid" in k_lower and "bssid" not in k_lower and v and v != "Unknown":
+                        self._cached_ssid = v
+                        self._cached_ssid_time = now
+                        return v
+        except Exception:
+            pass
+        self._cached_ssid = None
+        self._cached_ssid_time = now
+        return None
+
+    def get_effective_network_mode(self) -> str:
+        """
+        Determine whether current network environment is 'campus' or 'external'.
+        - If config 'network_mode' is 'campus' -> forced campus.
+        - If config 'network_mode' is 'external' -> forced external.
+        - If config 'network_mode' is 'auto' (default) -> intelligently auto-detect:
+            1. Check if default gateway or local IPv4 belongs to campus subnets (172.7.x.x, 172.15.x.x, 10.17.x.x)
+            2. Check if active Wi-Fi SSID matches campus keywords (GIT, campus, hostel, college)
+            3. Otherwise defaults to 'external'.
+        """
+        mode = self.config.get("network_mode", "auto")
+        if mode in ("campus", "external"):
+            return mode
+
+        now = time.time()
+        if hasattr(self, "_cached_eff_mode") and hasattr(self, "_cached_eff_mode_time"):
+            if (now - self._cached_eff_mode_time) < 4.0:
+                return self._cached_eff_mode
+
+        live_gw = get_default_gateway()
+        gw = str(live_gw or self.gateway_ip or "").strip()
+        loc = str(self.local_ip or "").strip()
+        campus_prefixes = ("172.7.", "172.15.", "10.17.")
+        if any(gw.startswith(p) for p in campus_prefixes) or any(loc.startswith(p) for p in campus_prefixes):
+            res = "campus"
+        else:
+            ssid = self.get_active_ssid()
+            if ssid:
+                s_lower = ssid.lower()
+                if any(kw in s_lower for kw in ("git", "campus", "hostel", "college")):
+                    res = "campus"
+                else:
+                    res = "external"
+            else:
+                res = "external"
+
+        self._cached_eff_mode = res
+        self._cached_eff_mode_time = now
+        return res
+
+    def get_user_agent(self):
+        mode = self.config.get("user_agent_mode", "Windows Chrome")
+        if mode == "Custom":
+            return self.config.get("custom_user_agent") or SPOOF_USER_AGENTS["Windows Chrome"]
+        return SPOOF_USER_AGENTS.get(mode, SPOOF_USER_AGENTS["Windows Chrome"])
+
+    def resolve_profile_for_network(self, current_gateway: Optional[str]) -> Optional[Dict[str, Any]]:
+        """
+        Feature 2: Auto-Profile Switching based on Default Gateway / Subnet match.
+        If auto_profile_switching is enabled, matches the discovered gateway against
+        each profile's 'gateway_match' rule. Automatically updates active_profile_index.
+        """
+        profiles = self.config.get("profiles", [])
+        if not profiles:
+            return None
+
+        if self.config.get("auto_profile_switching", True) and current_gateway and current_gateway != "-":
+            # Bug 19 fix: Sort rules by specificity (exact IP first, CIDR subnets next, then longest prefix match)
+            candidates = []
+            for i, p in enumerate(profiles):
+                match_val = str(p.get("gateway_match", "")).strip()
+                if not match_val:
+                    continue
+                score = 0
+                is_matched = False
+                if match_val == current_gateway:
+                    is_matched = True
+                    score = 1000
+                elif "/" in match_val:
+                    try:
+                        net = ipaddress.ip_network(match_val, strict=False)
+                        if ipaddress.ip_address(current_gateway) in net:
+                            is_matched = True
+                            score = 500 + net.prefixlen
+                    except Exception:
+                        pass
+                elif current_gateway.startswith(match_val):
+                    # Ensure prefix ends with a dot or matches boundary to avoid 10.17 matching 10.170.x.x
+                    if match_val.endswith(".") or current_gateway.startswith(match_val + "."):
+                        is_matched = True
+                        score = 100 + len(match_val)
+                
+                if is_matched:
+                    candidates.append((score, i, p, match_val))
+
+            if candidates:
+                candidates.sort(key=lambda x: x[0], reverse=True)
+                _, best_idx, best_prof, matched_rule = candidates[0]
+                curr_idx = self.config.get("active_profile_index", 0)
+                if best_idx != curr_idx:
+                    self.log(f"[Auto-Profile] Gateway '{current_gateway}' matched rule '{matched_rule}' (specificity score {candidates[0][0]}). Auto-switching to profile '{best_prof.get('name')}' (#{best_idx + 1})")
+                    self.update_config("active_profile_index", best_idx, save=True)
+                    if hasattr(self, "profile_switch_cb") and callable(self.profile_switch_cb):
+                        try:
+                            self.profile_switch_cb(best_idx)
+                        except Exception:
+                            pass
+                return best_prof
+
+        # Fallback to current active profile index
+        return self.get_active_profile()
+
+    def get_active_profile(self):
+        with _config_lock:
+            profiles = self.config.get("profiles", [])
+            idx = self.config.get("active_profile_index", 0)
+            if profiles and 0 <= idx < len(profiles):
+                return profiles[idx]
+            if profiles and idx >= len(profiles):
+                self.log(f"[Config] active_profile_index ({idx}) is out of range (have {len(profiles)} profiles). Falling back to first profile.")
+                self.config["active_profile_index"] = 0
+                try:
+                    save_settings(self.config)
+                except Exception as e:
+                    self.log(f"[Config] Failed to persist active_profile_index reset: {e}")
+                return profiles[0]
+            return None
+
+    def get_profile_daily_usage(self, username: str, date_str: Optional[str] = None) -> Tuple[int, int]:
+        """Return (in_bytes, out_bytes) recorded today (or on date_str) for the specified username."""
+        if not username:
+            return (0, 0)
+        d_str = date_str or datetime.date.today().isoformat()
+        with _config_lock:
+            tracking = self.config.get("daily_usage_tracking", {})
+            day_map = tracking.get(d_str, {})
+            user_data = day_map.get(username, {})
+            return (int(user_data.get("in", 0)), int(user_data.get("out", 0)))
+
+    def record_network_bytes(self, delta_in: int, delta_out: int) -> None:
+        """Accumulate transferred bytes into the current active profile's daily bandwidth record."""
+        if delta_in <= 0 and delta_out <= 0:
+            return
+        prof = self.get_active_profile()
+        if not prof or not prof.get("username"):
+            return
+        username = prof["username"].strip()
+        today_str = datetime.date.today().isoformat()
+
+        with self.quota_lock:
+            with _config_lock:
+                if "daily_usage_tracking" not in self.config or not isinstance(self.config["daily_usage_tracking"], dict):
+                    self.config["daily_usage_tracking"] = {}
+                tracking = self.config["daily_usage_tracking"]
+
+                # Prune records older than 14 days to keep config.json lightweight
+                try:
+                    cutoff = (datetime.date.today() - datetime.timedelta(days=14)).isoformat()
+                    for d_key in list(tracking.keys()):
+                        if str(d_key) < cutoff:
+                            del tracking[d_key]
+                except Exception:
+                    pass
+
+                if today_str not in tracking or not isinstance(tracking[today_str], dict):
+                    tracking[today_str] = {}
+                day_map = tracking[today_str]
+
+                if username not in day_map or not isinstance(day_map[username], dict):
+                    day_map[username] = {"in": 0, "out": 0}
+                day_map[username]["in"] = int(day_map[username].get("in", 0)) + delta_in
+                day_map[username]["out"] = int(day_map[username].get("out", 0)) + delta_out
+
+                # Throttle disk writes: persist to disk every 30 seconds or if delta >= 5 MB
+                now = time.time()
+                if (now - self.last_quota_save_time >= 30.0) or ((delta_in + delta_out) >= 5242880):
+                    self.last_quota_save_time = now
+                    try:
+                        save_settings(self.config)
+                    except Exception:
+                        pass
+
+    def get_active_profile_daily_total(self) -> int:
+        """Return total bytes (in + out) consumed today by the currently active profile."""
+        prof = self.get_active_profile()
+        if not prof or not prof.get("username"):
+            return 0
+        in_b, out_b = self.get_profile_daily_usage(prof["username"])
+        return in_b + out_b
+
+    def get_active_profile_quota_status(self) -> Dict[str, Any]:
+        """
+        Return unified daily bandwidth quota telemetry for the currently active profile:
+        used_bytes, limit_bytes, remaining_bytes, used_gb, limit_gb, remaining_gb, percent,
+        and source ('portal' when verified via captive portal API, or 'local' via physical adapter MIB deltas).
+        """
+        prof = self.get_active_profile()
+        today_str = datetime.date.today().isoformat()
+        uname = prof.get("username", "").strip() if prof else ""
+
+        limit_gb = float(self.config.get("daily_quota_limit_gb", 10.0))
+
+        # Check if we have active portal-verified data
+        if self.portal_usage_data and self.portal_usage_source == "portal":
+            p = self.portal_usage_data
+            lim_b = int(p.get("limit_bytes", int(limit_gb * 1000000000)))
+            srv_used = int(p.get("used_bytes", 0))
+            local_tot = self.get_active_profile_daily_total()
+            used_b = max(srv_used, local_tot)
+            rem_b = max(0, lim_b - used_b)
+            pct = min(100.0, (used_b / lim_b * 100.0)) if lim_b > 0 else 0.0
+
+            u_gb = used_b / 1000000000.0
+            l_gb = lim_b / 1000000000.0
+            r_gb = rem_b / 1000000000.0
+
+            return {
+                "used_bytes": used_b,
+                "limit_bytes": lim_b,
+                "remaining_bytes": rem_b,
+                "used_gb": u_gb,
+                "limit_gb": l_gb,
+                "remaining_gb": r_gb,
+                "percent": pct,
+                "source": "portal",
+                "username": uname
+            }
+
+        # Fallback to local network adapter telemetry
+        used_b = self.get_active_profile_daily_total()
+        lim_b = int(limit_gb * (1024**3))
+        rem_b = max(0, lim_b - used_b)
+        pct = min(100.0, (used_b / lim_b * 100.0)) if lim_b > 0 else 0.0
+
+        u_gb = used_b / (1024**3)
+        l_gb = limit_gb
+        r_gb = rem_b / (1024**3)
+
+        return {
+            "used_bytes": used_b,
+            "limit_bytes": lim_b,
+            "remaining_bytes": rem_b,
+            "used_gb": u_gb,
+            "limit_gb": l_gb,
+            "remaining_gb": r_gb,
+            "percent": pct,
+            "source": "local",
+            "username": uname
+        }
+
+    def query_portal_usage(self, session_id: Optional[str] = None, force: bool = False) -> Optional[Dict[str, Any]]:
+        """
+        Query the portal's /api/captiveportal/usage endpoint to retrieve official
+        real-time daily bandwidth quota (used bytes, remaining bytes, percent).
+        Falls back seamlessly to local adapter telemetry if the endpoint is unreachable,
+        unsupported (non-OPNsense), or returns an error.
+        """
+        if not self.config.get("portal_usage_sync", True):
+            return None
+
+        eff_mode = self.get_effective_network_mode()
+        if eff_mode == "external":
+            if force:
+                self.log("[Portal] Direct captive portal sync skipped: currently in External Network mode.")
+            return None
+
+        p_host = self.portal_host if (self.portal_host and self.portal_host != "-") else "www.opn.gitjaipur.com"
+        p_port = self.portal_port if self.portal_port else 8000
+        p_scheme = self.portal_scheme if self.portal_scheme else "https"
+
+        campus_indicators = ("opn.gitjaipur.com", "gitjaipur.com", "172.15.1.2", "172.7.0.1", "10.17.0.1")
+        is_campus_or_opn = (
+            self.portal_type == "opnsense" or
+            p_port == 8000 or
+            any(ind in str(p_host) for ind in campus_indicators) or
+            any(ind in str(self.gateway_ip) for ind in campus_indicators)
+        )
+        if not is_campus_or_opn and not force:
+            return None
+
+        with self.portal_usage_sync_lock:
+            now = time.time()
+            if not force and (now - self.last_portal_usage_sync < 15.0) and self.portal_usage_data:
+                return self.portal_usage_data
+
+            sid = session_id or self.portal_session_id
+            with self.session_lock:
+                if not sid:
+                    status_candidates = [
+                        f"{p_scheme}://{p_host}:{p_port}/api/captiveportal/access/status/",
+                        "https://www.opn.gitjaipur.com:8000/api/captiveportal/access/status/",
+                        "http://172.15.1.2:8000/api/captiveportal/access/status/",
+                        "https://172.15.1.2:8000/api/captiveportal/access/status/",
+                    ]
+                    for cand_url in status_candidates:
+                        try:
+                            headers = {"X-Requested-With": "XMLHttpRequest"}
+                            st_r = self.session.post(cand_url, data={"user": "", "password": ""},
+                                                     headers=headers, timeout=AppConstants.PORTAL_USAGE_TIMEOUT, verify=False)
+                            self._unsecure_portal_cookies()
+                            if st_r.status_code == 200:
+                                st_json = st_r.json()
+                                if st_json.get("clientState") == "AUTHORIZED" and st_json.get("sessionId"):
+                                    sid = st_json.get("sessionId")
+                                    self.portal_session_id = sid
+                                    parsed = urlparse(cand_url)
+                                    if p_host == "-" or not self.portal_host:
+                                        self.portal_host = parsed.hostname or p_host
+                                        self.portal_port = parsed.port or 8000
+                                        self.portal_scheme = parsed.scheme or "https"
+                                    break
+                        except Exception:
+                            continue
+
+                if not sid:
+                    return None
+
+                usage_urls = [
+                    f"{p_scheme}://{p_host}:{p_port}/api/captiveportal/usage",
+                    "https://www.opn.gitjaipur.com:8000/api/captiveportal/usage",
+                    "https://172.15.1.2:8000/api/captiveportal/usage",
+                    "http://172.15.1.2:8000/api/captiveportal/usage",
+                ]
+                seen = set()
+                usage_urls = [u for u in usage_urls if not (u in seen or seen.add(u))]
+
+                # Must supply Origin matching the campus domain as required by the OPNsense API
+                origin_host = "https://www.opn.gitjaipur.com:8000"
+                headers = {
+                    "Content-Type": "application/json",
+                    "X-Requested-With": "XMLHttpRequest",
+                    "Origin": origin_host,
+                    "Referer": f"{origin_host}/index.html"
+                }
+                payload = json.dumps({"sessionId": sid})
+
+                for u_url in usage_urls:
+                    try:
+                        resp = self.session.post(u_url, data=payload, headers=headers,
+                                                 timeout=AppConstants.PORTAL_USAGE_TIMEOUT, verify=False)
+                        self._unsecure_portal_cookies()
+                        if resp.status_code == 200:
+                            data = resp.json()
+                            used_b = data.get("used_bytes")
+                            limit_b = data.get("limit_bytes")
+                            rem_b = data.get("remaining_bytes")
+                            pct = data.get("percent")
+
+                            if used_b is not None and limit_b is not None:
+                                used_bytes = int(used_b)
+                                limit_bytes = int(limit_b)
+                                remaining_bytes = int(rem_b) if rem_b is not None else max(0, limit_bytes - used_bytes)
+                                percent = float(pct) if pct is not None else ((used_bytes / limit_bytes * 100.0) if limit_bytes > 0 else 0.0)
+
+                                usage_record = {
+                                    "used_bytes": used_bytes,
+                                    "limit_bytes": limit_bytes,
+                                    "remaining_bytes": remaining_bytes,
+                                    "percent": round(percent, 2),
+                                    "used_gb": round(data.get("used_gb", used_bytes / 1000000000.0), 3),
+                                    "limit_gb": round(data.get("limit_gb", limit_bytes / 1000000000.0), 2),
+                                    "remaining_gb": round(data.get("remaining_gb", remaining_bytes / 1000000000.0), 3),
+                                    "username": data.get("username", ""),
+                                    "date": data.get("date", datetime.date.today().isoformat()),
+                                    "timestamp": time.time(),
+                                    "source": "portal"
+                                }
+
+                                self.portal_usage_data = usage_record
+                                self.portal_usage_source = "portal"
+                                self.last_portal_usage_sync = time.time()
+
+                                self._sync_portal_usage_to_tracking(usage_record)
+                                return usage_record
+                    except Exception:
+                        continue
+
+            return None
+
+    def _sync_portal_usage_to_tracking(self, usage_record: Dict[str, Any]) -> None:
+        """
+        Synchronize official portal usage data into config['daily_usage_tracking']
+        for the active profile, ensuring consistency across profiles view, rotation,
+        and disk persistence.
+        """
+        today_str = usage_record.get("date") or datetime.date.today().isoformat()
+        used_bytes = int(usage_record["used_bytes"])
+        limit_bytes = int(usage_record["limit_bytes"])
+        portal_uname = usage_record.get("username", "").strip()
+
+        with self.quota_lock:
+            with _config_lock:
+                if "daily_usage_tracking" not in self.config or not isinstance(self.config["daily_usage_tracking"], dict):
+                    self.config["daily_usage_tracking"] = {}
+                tracking = self.config["daily_usage_tracking"]
+                if today_str not in tracking or not isinstance(tracking[today_str], dict):
+                    tracking[today_str] = {}
+                
+                day_map = tracking[today_str]
+                entry = {
+                    "in": used_bytes,
+                    "out": 0,
+                    "server_synced": True,
+                    "remaining_bytes": usage_record.get("remaining_bytes"),
+                    "limit_bytes": limit_bytes,
+                    "percent": usage_record.get("percent"),
+                    "last_synced": time.time()
+                }
+
+                # Update the profile matching the portal's authenticated account
+                if portal_uname:
+                    day_map[portal_uname] = entry
+
+                # Also update for active profile
+                prof = self.get_active_profile()
+                active_uname = prof.get("username", "").strip() if prof else ""
+                if active_uname:
+                    day_map[active_uname] = entry
+
+                server_limit_gb = usage_record.get("limit_gb")
+                if server_limit_gb and abs(float(self.config.get("daily_quota_limit_gb", 10.0)) - float(server_limit_gb)) > 0.05:
+                    self.config["daily_quota_limit_gb"] = float(server_limit_gb)
+
+                now = time.time()
+                if now - self.last_quota_save_time >= 30.0:
+                    self.last_quota_save_time = now
+                    try:
+                        save_settings(self.config)
+                    except Exception:
+                        pass
+
+    def check_quota_and_rotate_if_needed(self) -> None:
+        """
+        Check physical network interface transfer deltas, record daily profile usage,
+        and evaluate against the 10 GB limit (or user-defined daily quota).
+        Triggers multi-account auto-rotation upon hitting the limit.
+        """
+        if not self.is_online():
+            self.last_quota_check_io = get_system_network_io()
+            return
+
+        cur_in, cur_out = get_system_network_io()
+        prev_in, prev_out = self.last_quota_check_io
+        self.last_quota_check_io = (cur_in, cur_out)
+
+        # Sanity check: delta must be non-negative and under 2 GB per tick (filter reboot/adapter reset jumps)
+        if cur_in >= prev_in and cur_out >= prev_out:
+            d_in = cur_in - prev_in
+            d_out = cur_out - prev_out
+            if (d_in + d_out) < 2147483648:
+                self.record_network_bytes(d_in, d_out)
+
+        prof = self.get_active_profile()
+        if not prof or not prof.get("username"):
+            return
+
+        # Attempt periodic portal quota sync if due (every 30s) - ONLY on campus network, and ALWAYS async (never block UI thread)
+        now = time.time()
+        eff_mode = self.get_effective_network_mode()
+        if eff_mode == "campus" and (self.portal_type == "opnsense" or self.portal_port == 8000) and (now - self.last_portal_usage_sync >= AppConstants.PORTAL_USAGE_SYNC_INTERVAL):
+            if self.config.get("portal_usage_sync", True):
+                threading.Thread(target=self.query_portal_usage, daemon=True).start()
+
+        u_name = prof.get("name", "Active Profile")
+        u_user = prof.get("username", "")
+        today_str = datetime.date.today().isoformat()
+
+        q_info = self.get_active_profile_quota_status()
+        total_bytes = q_info["used_bytes"]
+        limit_bytes = q_info["limit_bytes"]
+        limit_gb = q_info["limit_gb"]
+        used_gb = q_info["used_gb"]
+        remaining_gb = q_info["remaining_gb"]
+        pct = q_info["percent"]
+
+        # Warning threshold: 80% (only on campus)
+        if eff_mode == "campus" and pct >= 80.0 and (u_user, today_str) not in self.quota_warning_sent_80:
+            self.quota_warning_sent_80.add((u_user, today_str))
+            src_str = " (Portal Verified)" if q_info["source"] == "portal" else ""
+            self.log(f"[Quota Alert] Profile '{u_name}' ({u_user}) has used {used_gb:.2f} GB ({remaining_gb:.2f} GB left of daily {limit_gb:.1f} GB limit){src_str}.")
+            self.alert("warning")
+            self.notify(
+                "Daily Quota Alert (80%)",
+                f"Profile '{u_name}' has used {used_gb:.2f} GB ({remaining_gb:.2f} GB remaining of {limit_gb:.1f} GB limit)."
+            )
+
+        # Warning threshold: 95% (only on campus)
+        if eff_mode == "campus" and pct >= 95.0 and (u_user, today_str) not in self.quota_warning_sent_95:
+            self.quota_warning_sent_95.add((u_user, today_str))
+            src_str = " (Portal Verified)" if q_info["source"] == "portal" else ""
+            self.log(f"[Quota Critical] Profile '{u_name}' ({u_user}) has used {used_gb:.2f} GB ({remaining_gb:.2f} GB left of daily {limit_gb:.1f} GB limit){src_str}.")
+            self.alert("warning")
+            self.notify(
+                "Daily Quota Critical (95%)",
+                f"Profile '{u_name}' is nearing 10 GB limit ({used_gb:.2f}/{limit_gb:.1f} GB, {remaining_gb:.2f} GB left)!"
+            )
+
+        # Limit reached (100%): Auto-Rotate (only rotate campus accounts when in campus mode)
+        if total_bytes >= limit_bytes and eff_mode == "campus":
+            if self.config.get("auto_rotate_on_quota", True):
+                if not self.is_auto_rotating:
+                    used_gb = total_bytes / (1024**3)
+                    self.log(f"[Auto-Rotate] 10 GB Daily limit reached on '{u_name}' ({used_gb:.2f} GB used). Rotating to next profile...")
+                    self.rotate_to_next_profile(reason="daily_quota_exhausted")
+
+    def rotate_to_next_profile(self, reason: str = "manual") -> bool:
+        """
+        Multi-Account Auto-Rotation:
+        Selects the next configured profile with remaining daily quota,
+        logs out of the current captive portal session to release the IP/firewall binding,
+        updates the active profile, and initiates immediate re-authentication.
+        """
+        with self.state_lock:
+            if self.is_auto_rotating:
+                return False
+            self.is_auto_rotating = True
+
+        try:
+            with _config_lock:
+                profiles = self.config.get("profiles", [])
+                if not profiles or len(profiles) <= 1:
+                    self.log(f"[Auto-Rotate] Cannot rotate: Only {len(profiles)} profile configured. Add another profile in the Profiles tab.")
+                    return False
+
+                curr_idx = self.config.get("active_profile_index", 0)
+                curr_prof = profiles[curr_idx] if 0 <= curr_idx < len(profiles) else {}
+                curr_name = curr_prof.get("name", f"Profile #{curr_idx + 1}")
+                limit_gb = float(self.config.get("daily_quota_limit_gb", 10.0))
+                limit_bytes = int(limit_gb * (1024**3))
+                today_str = datetime.date.today().isoformat()
+
+                candidates = []
+                for offset in range(1, len(profiles)):
+                    cand_idx = (curr_idx + offset) % len(profiles)
+                    cand_prof = profiles[cand_idx]
+                    cand_user = cand_prof.get("username", "").strip()
+                    if not cand_user:
+                        continue
+                    in_b, out_b = self.get_profile_daily_usage(cand_user, today_str)
+                    tot_b = in_b + out_b
+                    is_under = (tot_b < limit_bytes)
+                    candidates.append((cand_idx, cand_prof, tot_b, is_under))
+
+                if not candidates:
+                    self.log("[Auto-Rotate] No valid candidate profiles found with usernames.")
+                    return False
+
+                # Prefer candidate that has not exceeded quota
+                chosen = next((c for c in candidates if c[3]), None)
+                if not chosen:
+                    # All profiles have hit quota; pick the one with lowest daily usage
+                    chosen = min(candidates, key=lambda c: c[2])
+                    self.log(f"[Auto-Rotate] Notice: All profiles reached quota. Rotating to lowest usage: '{chosen[1].get('name')}' ({chosen[2]/(1024**3):.2f} GB).")
+
+                next_idx = chosen[0]
+                next_prof = chosen[1]
+                next_name = next_prof.get("name", f"Profile #{next_idx + 1}")
+
+                self.config["active_profile_index"] = next_idx
+                self.failed_login_attempts = 0
+                save_settings(self.config)
+
+            self.log(f"[Auto-Rotate] Rotated profile from '{curr_name}' to '{next_name}' (#{next_idx + 1}) [Reason: {reason.replace('_', ' ')}].")
+
+            if hasattr(self, "profile_switch_cb") and callable(self.profile_switch_cb):
+                try:
+                    self.profile_switch_cb(next_idx)
+                except Exception as e:
+                    self.log(f"[Auto-Rotate] UI callback error: {e}")
+
+            self.notify(
+                "Multi-Account Auto-Rotation",
+                f"Switched to '{next_name}' ({next_prof.get('username')}). Re-authenticating..."
+            )
+
+            def _rotate_worker():
+                try:
+                    self.log("[Auto-Rotate] Logging out of current portal session for clean handoff...")
+                    self.logout(disconnect_wifi=False, pause_auto_reconnect=False)
+                    with self.state_lock:
+                        self.user_signed_out = False
+                        self.keepalive_url = None
+                        self.current_magic = None
+                        self.portal_session_id = None
+                        self.portal_usage_data = None
+                        self.portal_usage_source = "local"
+                        self.failed_login_attempts = 0
+                        self.error_backoff_seconds = 30.0
+                    with self.session_lock:
+                        try:
+                            self.session.cookies.clear()
+                        except Exception:
+                            pass
+                    time.sleep(2.5)
+                    self.set_status("Shotgun Probing...")
+                    self.log(f"[Auto-Rotate] Re-probing captive portal with profile '{next_name}'...")
+                    self.interrupt_cycle()
+                finally:
+                    with self.state_lock:
+                        self.is_auto_rotating = False
+
+            threading.Thread(target=_rotate_worker, daemon=True).start()
+            return True
+        except Exception as e:
+            self.log(f"[Auto-Rotate] Error during profile rotation: {e}")
+            with self.state_lock:
+                self.is_auto_rotating = False
+            return False
+
+    def start(self):
+        if not self.running:
+            self.running = True
+            self.cycle_event.clear()
+            if self.config.get("proxy_enabled", False):
+                try:
+                    self.proxy_server.start()
+                except Exception as pe:
+                    self.log(f"Proxy failed to start during initialization: {pe}")
+            if self.worker_thread and self.worker_thread.is_alive():
+                return
+            self.worker_thread = threading.Thread(target=self._cycle, daemon=True)
+            self.worker_thread.start()
+
+    def stop(self):
+        self.running = False
+        self.cycle_event.set()
+        self.proxy_server.stop()
+        self.set_status("Disconnected")
+
+    def interrupt_cycle(self):
+        self.cycle_event.set()
+
+    def _cycle(self):
+        while self.running:
+            self.cycle_event.clear()
+            try:
+                if self.user_signed_out:
+                    self.cycle_event.wait(3.0)
+                    continue
+
+                # Auto-detect gateway first so profile auto-switching can match network
+                curr_gw = get_default_gateway() or self.gateway_ip
+                profile = self.resolve_profile_for_network(curr_gw)
+                if not profile or not profile.get("username"):
+                    self.set_status("No Profile Configured")
+                    self.cycle_event.wait(5.0)
+                    continue
+
+                # Lockout prevention: Check if max retries exceeded on rejected credentials
+                if self.failed_login_attempts >= self.max_login_retries:
+                    self.set_status("Login Paused (Retries Exceeded)")
+                    self.log(f"Login paused after {self.failed_login_attempts} failed attempts to prevent account lockout. Click 'Force Re-Probe' or switch profile to retry.")
+                    self.cycle_event.wait(300)
+                    continue
+
+                self.session.headers.update({"User-Agent": self.get_user_agent()})
+                connected = self._run_shotgun_authentication(profile, gw=curr_gw)
+
+                if connected:
+                    self.failed_login_attempts = 0
+                    self.error_backoff_seconds = 30.0
+                elif self.status == "Login Rejected":
+                    self.failed_login_attempts += 1
+                    self.log(f"Consecutive failed login attempts: {self.failed_login_attempts}/{self.max_login_retries}")
+                    # Auto-rotate to another profile if credentials rejected repeatedly
+                    if (self.config.get("auto_rotate_on_quota", True) or self.config.get("auto_rotate_on_disconnect", False)) and self.failed_login_attempts >= 2:
+                        profiles = self.config.get("profiles", [])
+                        if len(profiles) > 1 and not self.is_auto_rotating:
+                            self.log("[Auto-Rotate] Consecutive login rejections on active profile. Auto-rotating to next account...")
+                            self.rotate_to_next_profile(reason="login_rejected")
+                            self.cycle_event.wait(5.0)
+                            continue
+                    # Check auto_reconnect before sleeping to avoid unnecessary 120s delay
+                    if not self.config.get("auto_reconnect", True):
+                        self.log("Auto-reconnect is disabled. Waiting for manual Re-Probe.")
+                        self.cycle_event.wait()
+                        continue
+                    self.cycle_event.wait(120)
+                elif self.status in ("Error", "Untrusted Portal"):
+                    # Bug 14: Exponential backoff on Error or Untrusted Portal (30s -> 60s -> 120s -> max 300s)
+                    self.log(f"Encountered status '{self.status}'. Backing off probe for {int(self.error_backoff_seconds)}s.")
+                    # Check auto_reconnect before sleeping
+                    if not self.config.get("auto_reconnect", True):
+                        self.log("Auto-reconnect is disabled. Waiting for manual Re-Probe.")
+                        self.cycle_event.wait()
+                        continue
+                    self.cycle_event.wait(self.error_backoff_seconds)
+                    self.error_backoff_seconds = min(300.0, self.error_backoff_seconds * 2.0)
+                    continue
+
+                # Honor auto_reconnect setting: If disconnected and auto_reconnect is disabled, pause until manual user action (Bug 8)
+                if not connected and not self.config.get("auto_reconnect", True):
+                    self.log("Auto-reconnect is disabled in config. Waiting indefinitely for manual Re-Probe.")
+                    self.cycle_event.wait()
+                    continue
+
+                with self.state_lock:
+                    has_keepalive = bool(connected and self.keepalive_url)
+
+                # Validate keepalive_interval to prevent hammering or crashes on invalid/zero values
+                raw_interval = self.config.get("keepalive_interval", 120)
+                try:
+                    interval_val = max(10, int(raw_interval))
+                except (ValueError, TypeError):
+                    interval_val = 120
+
+                # Feature 4: Use adaptive keepalive interval if enabled
+                if self.config.get("adaptive_keepalive", True):
+                    interval_val = max(10, self.current_keepalive_interval)
+
+                if has_keepalive:
+                    wait_sec = interval_val
+                    while self.running and wait_sec > 0:
+                        with self.state_lock:
+                            if not self.keepalive_url or self.user_signed_out:
+                                break
+                        self.check_quota_and_rotate_if_needed()
+                        if self.cycle_event.wait(min(5.0, wait_sec)):
+                            self.cycle_event.clear()
+                            break
+                        wait_sec -= 5
+
+                    with self.state_lock:
+                        should_ping = bool(self.running and self.keepalive_url and not self.user_signed_out)
+                    if should_ping:
+                        self._ping_keepalive()
+
+                elif connected and not self.user_signed_out:
+                    wait_sec = interval_val
+                    while self.running and wait_sec > 0:
+                        if self.user_signed_out:
+                            break
+                        self.check_quota_and_rotate_if_needed()
+                        if self.cycle_event.wait(min(5.0, wait_sec)):
+                            self.cycle_event.clear()
+                            break
+                        wait_sec -= 5
+
+                self.cycle_event.wait(6.0)
+
+            except Exception as e:
+                self.log(f"Cycle error: {e}")
+                self.cycle_event.wait(10)
+
+    def _run_shotgun_authentication(self, profile: Optional[Dict[str, Any]], gw: Optional[str] = None) -> bool:
+        if not profile:
+            return False
+        try:
+            was_connected = self.is_online()
+            if not was_connected:
+                self.set_status("Shotgun Probing...")
+
+            # Adapt to network transitions (Bug 15, Bug 55)
+            active_gw = gw or get_default_gateway()
+            if active_gw and active_gw != "-":
+                if self.gateway_ip != "-" and self.gateway_ip != active_gw:
+                    self.log(f"[Network] Gateway transitioned from {self.gateway_ip} to {active_gw}. Resetting portal parameters.")
+                    trusted_hosts = self.config.get("trusted_portal_hosts", [])
+                    # Do not overwrite dedicated campus portal (e.g. 172.15.1.2:8000) when roaming APs
+                    if self.portal_host not in trusted_hosts and self.portal_host not in ("172.15.1.2", "172.15.1.1", "www.opn.gitjaipur.com", "opn.gitjaipur.com") and not (self.portal_host and self.portal_host.endswith(".gitjaipur.com")):
+                        self.portal_host = active_gw
+                        self.portal_port = AppConstants.DEFAULT_PORTAL_PORT
+                        self.portal_scheme = "http"
+                    with self.state_lock:
+                        self.keepalive_url = None
+                        self.current_magic = None
+                self.gateway_ip = active_gw
+
+            try:
+                s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                try:
+                    s.connect(("8.8.8.8", 80))
+                    self.local_ip = s.getsockname()[0]
+                finally:
+                    s.close()
+                self.proxy_server.update_bind_host(self.local_ip)
+            except (socket.error, OSError):
+                try:
+                    self.local_ip = socket.gethostbyname(socket.gethostname())
+                except (socket.error, OSError):
+                    self.local_ip = "127.0.0.1"
+                self.proxy_server.update_bind_host(self.local_ip)
+
+            # Check network environment mode (Manual Override or Auto-Detected)
+            eff_mode = self.get_effective_network_mode()
+            if eff_mode == "external":
+                probe_url = AppConstants.PROBE_URL
+                try:
+                    resp = self.session.get(probe_url, allow_redirects=True, timeout=AppConstants.PROBE_HTTP_TIMEOUT, verify=False)
+                    if resp.status_code == 204:
+                        if not self.session_start:
+                            self.session_start = time.time()
+                        with self.state_lock:
+                            self.keepalive_url = None
+                            self.current_magic = None
+                        if not was_connected:
+                            self.set_status("External Network (Online)")
+                            self.log("[Mode: External] Online on non-campus network. Captive portal authentication bypassed.")
+                            self.alert("ok")
+                        return True
+                except Exception:
+                    pass
+                self.set_status("Disconnected")
+                return False
+
+            probe_url = AppConstants.PROBE_URL
+            try:
+                resp = self.session.get(probe_url, allow_redirects=True, timeout=AppConstants.PROBE_HTTP_TIMEOUT, verify=False)
+            except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as initial_err:
+                # If DNS failed or connection timed out, the client is likely behind a captive portal gating DNS.
+                # Try candidate fallback probes in prioritized order:
+                fallback_candidates = []
+                trusted_hosts = self.config.get("trusted_portal_hosts", [])
+                is_campus = (
+                    self.gateway_ip == "172.7.0.1" or
+                    "172.15.1.2" in trusted_hosts or
+                    "www.opn.gitjaipur.com" in trusted_hosts or
+                    self.portal_host in ("172.15.1.2", "www.opn.gitjaipur.com", "opn.gitjaipur.com") or
+                    (self.portal_host and self.portal_host.endswith(".gitjaipur.com")) or
+                    self.config.get("last_gateway") == "172.7.0.1"
+                )
+                if is_campus:
+                    fallback_candidates.append("https://www.opn.gitjaipur.com:8000/index.html")
+                    fallback_candidates.append("http://172.15.1.2:8000/index.html")
+
+                # Outbound Internet IP (triggers captive portal redirect when gateway intercepts port 80)
+                fallback_candidates.append("http://1.1.1.1:80/")
+
+                # Gateway IP (captures direct gateway portals e.g. FortiGate)
+                if self.gateway_ip and self.gateway_ip != "-":
+                    fallback_candidates.append(f"http://{self.gateway_ip}:80/")
+
+                # Saved portal target if custom port or non-gateway
+                if self.portal_host and self.portal_host not in ("-", "172.15.1.2"):
+                    p_scheme = self.portal_scheme or "http"
+                    p_port = self.portal_port or 80
+                    cand = f"{p_scheme}://{self.portal_host}:{p_port}/"
+                    if cand not in fallback_candidates:
+                        fallback_candidates.append(cand)
+
+                fallback_resp = None
+                for target in fallback_candidates:
+                    try:
+                        f_resp = self.session.get(target, allow_redirects=True, timeout=3.5, verify=False)
+                        norm_f_url = (f_resp.url or "").rstrip("/") + "/"
+                        norm_target = target.rstrip("/") + "/"
+
+                        if f_resp.status_code == 204:
+                            fallback_resp = f_resp
+                            break
+
+                        if f_resp.url and norm_f_url != norm_target:
+                            fallback_resp = f_resp
+                            break
+
+                        if f_resp.status_code == 200 and any(kw in f_resp.text for kw in ("/api/captiveportal", "inputUsername", "inputPassword")):
+                            fallback_resp = f_resp
+                            break
+
+                        if "index-view-container" in f_resp.text or "web switch" in str(f_resp.headers).lower():
+                            for cand_target in ("https://www.opn.gitjaipur.com:8000/index.html", "http://172.15.1.2:8000/index.html"):
+                                try:
+                                    opn_resp = self.session.get(cand_target, timeout=3.0, verify=False)
+                                    if opn_resp.status_code == 200 and ("/api/captiveportal" in opn_resp.text or "inputUsername" in opn_resp.text):
+                                        fallback_resp = opn_resp
+                                        break
+                                except Exception:
+                                    pass
+                            if fallback_resp is not None:
+                                break
+                            fallback_resp = f_resp
+                            break
+
+                        if f_resp.status_code == 200 and any(kw in f_resp.text.lower() for kw in ("login", "captiveportal", "magic", "password", "fgtauth")):
+                            fallback_resp = f_resp
+                            break
+                    except Exception:
+                        continue
+
+                if fallback_resp is not None:
+                    resp = fallback_resp
+                else:
+                    raise initial_err
+            
+            if resp.status_code == 204:
+                # Bug 9: Online and unrestricted — restore session_start whenever it's None regardless of was_connected
+                if not self.session_start:
+                    self.session_start = time.time()
+
+                # Online and unrestricted: If we had a cached session for this gateway/portal, restore keepalive
+                if not self.keepalive_url:
+                    saved_gw = self.config.get("last_gateway")
+                    p_host = self.portal_host if (self.portal_host and self.portal_host != "-") else self.gateway_ip
+                    if p_host and p_host != "-":
+                        if self.portal_type == "opnsense" or self.portal_port == 8000:
+                            self.keepalive_url = f"{self.portal_scheme}://{p_host}:{self.portal_port}/api/captiveportal/access/status/"
+                        elif self.config.get("last_magic") and saved_gw and (saved_gw == self.gateway_ip):
+                            self.current_magic = self.config.get("last_magic")
+                            self.keepalive_url = f"{self.portal_scheme}://{p_host}:{self.portal_port}/keepalive?{self.current_magic}"
+                            self.log(f"Restored active FortiGate session token from cache for gateway {self.gateway_ip}")
+
+                if not was_connected:
+                    self.set_status("Connected")
+                    self.log("Shotgun Probe passed: Online and unrestricted.")
+                    self.alert("ok")
+
+                # If connected to campus portal, query portal usage in background
+                if self.portal_type == "opnsense" or self.portal_port == 8000:
+                    threading.Thread(target=lambda: self.query_portal_usage(force=False), daemon=True).start()
+                return True
+
+            portal_url = resp.url
+            self.log(f"Portal redirect captured: {portal_url}")
+
+            parsed_portal = urlparse(portal_url)
+            redirect_host = parsed_portal.hostname or ""
+            redirect_scheme = parsed_portal.scheme or "http"
+            if parsed_portal.port:
+                redirect_port = parsed_portal.port
+            elif redirect_scheme == "https":
+                redirect_port = 443
+            else:
+                redirect_port = 80
+
+            # Bug 18 fix: Handle in-place captive portals answering probe URL with 200 login page
+            probe_hostname = urlparse(probe_url).hostname
+            if redirect_host.lower() == (probe_hostname or "").lower():
+                # Check if it returned a captive portal login page on the probe URL
+                is_inplace_portal = any(kw in resp.text.lower() for kw in ("login", "captiveportal", "magic", "inputusername", "password", "fgtauth"))
+                if is_inplace_portal and self.gateway_ip and self.gateway_ip != "-":
+                    self.log("Detected in-place captive portal serving login directly on probe URL. Redirecting target to gateway.")
+                    redirect_host = self.gateway_ip
+                    redirect_port = self.portal_port if (self.portal_port and self.portal_port not in (80, 443)) else 80
+                    portal_url = f"{redirect_scheme}://{redirect_host}:{redirect_port}/"
+                else:
+                    self.log(f"Probe returned non-204 ({resp.status_code}) without redirect. Preserving gateway {self.gateway_ip}.")
+                    self.set_status("Disconnected")
+                    return False
+
+            # Bug 3: Validate redirect host against config allow-list, campus network, and gateway
+            trusted_hosts = self.config.get("trusted_portal_hosts", [])
+            campus_hosts = {"172.15.1.2", "172.15.1.1", "www.opn.gitjaipur.com", "opn.gitjaipur.com"}
+            is_valid_portal_target = (
+                (redirect_host and redirect_host == self.gateway_ip) or
+                (redirect_host and redirect_host in campus_hosts) or
+                (redirect_host and (redirect_host == "gitjaipur.com" or redirect_host.endswith(".gitjaipur.com"))) or
+                (redirect_host and redirect_host in trusted_hosts) or
+                (redirect_host and any(str(h) == redirect_host for h in trusted_hosts))
+            )
+            if not is_valid_portal_target:
+                self.log(f"[Security] Captive portal redirected to unlisted host '{redirect_host}' (gateway: {self.gateway_ip}). Refusing to send credentials. Add host to Settings -> Trusted Hosts if legitimate.")
+                self.set_status("Untrusted Portal")
+                return False
+
+            # If redirected to an access point/switch landing page (e.g., 172.7.0.1:80 Web Switch) without login inputs,
+            # query the known college captive portal (172.15.1.2:8000) directly to fetch the actual login state.
+            # Bug 16 fix: Only trigger if current gateway is 172.7.0.1 or 172.15.1.2 is explicitly trusted
+            trusted_portal_hosts = self.config.get("trusted_portal_hosts", [])
+            is_campus_network = (
+                self.gateway_ip == "172.7.0.1" or
+                "172.15.1.2" in trusted_portal_hosts or
+                "www.opn.gitjaipur.com" in trusted_portal_hosts or
+                any("172.15.1.2" in str(h) or "gitjaipur.com" in str(h) for h in trusted_portal_hosts) or
+                redirect_host in campus_hosts or
+                (redirect_host and redirect_host.endswith(".gitjaipur.com"))
+            )
+            if is_campus_network and ("Server': 'Web Switch'" in str(resp.headers) or "index-view-container" in resp.text or 
+                (redirect_host == self.gateway_ip and redirect_port == 80 and "/api/captiveportal" not in resp.text and "magic" not in resp.text)):
+                self.log(f"Gateway {redirect_host}:80 is an AP switch page. Checking dedicated captive portal...")
+                for probe_target, p_host, p_port, p_scheme in (
+                    ("https://www.opn.gitjaipur.com:8000/index.html", "www.opn.gitjaipur.com", 8000, "https"),
+                    ("http://172.15.1.2:8000/index.html", "172.15.1.2", 8000, "http"),
+                ):
+                    try:
+                        opn_test = self.session.get(probe_target, timeout=3.5, verify=False)
+                        if opn_test.status_code == 200 and ("/api/captiveportal" in opn_test.text or "inputUsername" in opn_test.text or ":8000" in opn_test.url):
+                            resp = opn_test
+                            portal_url = probe_target
+                            redirect_host = p_host
+                            redirect_port = p_port
+                            redirect_scheme = p_scheme
+                            self.log(f"Redirected discovery to OPNsense portal at {p_host}:{p_port}")
+                            break
+                    except Exception as opn_err:
+                        self.log(f"Direct probe to {probe_target}: {opn_err}")
+
+            # Store redirect host into self.portal_host
+            self.portal_host = redirect_host
+            self.portal_port = redirect_port
+            self.portal_scheme = redirect_scheme
+
+            # Check if user clicked sign out while probe/discovery was in-flight
+            with self.state_lock:
+                if self.user_signed_out:
+                    self.log("Authentication cancelled: User initiated sign out.")
+                    return False
+
+            # Validate password is ready and not corrupted
+            pwd = profile.get("password", "")
+            if not pwd:
+                self.log("Cannot authenticate: Profile password is empty or decryption failed.")
+                self.set_status("Error")
+                return False
+
+            # Detect Portal Engine: OPNsense/pfSense vs FortiGate
+            is_opnsense = ("/api/captiveportal/" in resp.text or 
+                           "/api/captiveportal/" in portal_url or 
+                           "inputUsername" in resp.text or 
+                           redirect_host in ("172.15.1.2", "www.opn.gitjaipur.com", "opn.gitjaipur.com") or
+                           (redirect_host and redirect_host.endswith(".gitjaipur.com")) or
+                           ":8000" in portal_url)
+
+            keepalive_url = None
+
+            if is_opnsense:
+                self.portal_type = "opnsense"
+                # Bug 17 fix: Reset current_magic on OPNsense branch to avoid persisting stale FortiGate tokens
+                self.current_magic = None
+                self.log(f"Detected OPNsense Captive Portal on {self.portal_host}:{self.portal_port}")
+                self.set_status("Logging In...")
+
+                api_logon_url = f"{self.portal_scheme}://{self.portal_host}:{self.portal_port}/api/captiveportal/access/logon/"
+                self.log(f"Authenticating via OPNsense API as [{profile.get('name', 'User')}] ({profile['username']})...")
+                
+                auth_payload = {
+                    "user": profile["username"],
+                    "password": pwd
+                }
+                headers = {"X-Requested-With": "XMLHttpRequest"}
+                auth_resp = self.session.post(api_logon_url, data=auth_payload, headers=headers,
+                                               timeout=AppConstants.AUTH_POST_TIMEOUT, verify=False)
+                self._unsecure_portal_cookies()
+                
+                # Check sign-out race condition
+                with self.state_lock:
+                    if self.user_signed_out:
+                        self.log("Session cancelled post-auth: User signed out during handshake.")
+                        return False
+
+                auth_success = False
+                api_explicit_rejection = False
+                try:
+                    data = auth_resp.json()
+                    if data.get("clientState") == "AUTHORIZED":
+                        auth_success = True
+                        if data.get("sessionId"):
+                            self.portal_session_id = data.get("sessionId")
+                    elif data.get("clientState") in ("NOT_AUTHORIZED", "REJECTED", "ERROR") or "user" in data:
+                        api_explicit_rejection = True
+                        self.log(f"OPNsense logon API rejected credentials: {data}")
+                    else:
+                        self.log(f"OPNsense logon response: {data}")
+                except Exception:
+                    if auth_resp.status_code == 200 and "AUTHORIZED" in auth_resp.text:
+                        auth_success = True
+
+                if api_explicit_rejection:
+                    self.set_status("Login Rejected")
+                    self.log("OPNsense credentials rejected. Verify username/password.")
+                    self.alert("fail")
+                    return False
+
+                if not auth_success and auth_resp.status_code != 200:
+                    self.log(f"OPNsense logon returned HTTP {auth_resp.status_code}")
+
+                # For OPNsense, keepalive is maintained by monitoring the session status API endpoint
+                keepalive_url = f"{self.portal_scheme}://{self.portal_host}:{self.portal_port}/api/captiveportal/access/status/"
+
+            else:
+                self.portal_type = "fortigate"
+                self.current_magic = None
+                if "fgtauth" in portal_url or "magic" in portal_url:
+                    m = REGEX_MAGIC_FGT.search(portal_url)
+                    if m:
+                        self.current_magic = m.group(1)
+                if not self.current_magic:
+                    m = REGEX_MAGIC_QUERY.search(portal_url)
+                    if m:
+                        self.current_magic = m.group(1)
+                if not self.current_magic:
+                    m = REGEX_MAGIC_INPUT1.search(resp.text)
+                    if not m:
+                        m = REGEX_MAGIC_INPUT2.search(resp.text)
+                    if m:
+                        self.current_magic = m.group(1)
+
+                if not self.current_magic:
+                    self.set_status("Redirected (No Magic)")
+                    self.log("Captive portal intercepted but magic token was not extracted. Retrying...")
+                    return False
+
+                self.log(f"Extracted FortiGate magic token: {self.current_magic}")
+                self.set_status("Logging In...")
+
+                post_url = portal_url.split("?")[0]
+                payload = {
+                    "4Tredir": probe_url,
+                    "magic":   self.current_magic,
+                    "username": profile["username"],
+                    "password": pwd,
+                }
+                self.log(f"Authenticating as [{profile.get('name', 'User')}] ({profile['username']})...")
+                auth_resp = self.session.post(post_url, data=payload, allow_redirects=False, timeout=AppConstants.AUTH_POST_TIMEOUT, verify=False)
+
+                # Re-check sign-out race condition immediately after POST
+                with self.state_lock:
+                    if self.user_signed_out:
+                        self.log("Session cancelled post-auth: User signed out during handshake.")
+                        return False
+
+                if auth_resp.status_code in (301, 302, 303, 307, 308) and "Location" in auth_resp.headers:
+                    loc = auth_resp.headers["Location"]
+                    if "generate_204" not in loc and "connectivitycheck" not in loc:
+                        portal_base = f"{self.portal_scheme}://{self.portal_host}:{self.portal_port}"
+                        if loc.startswith("/"):
+                            keepalive_url = portal_base + loc
+                        elif loc.startswith("http"):
+                            keepalive_url = loc
+                        else:
+                            keepalive_url = portal_base + "/" + loc
+                        self.log(f"Keepalive URL from Location header: {keepalive_url}")
+
+                if not keepalive_url:
+                    km = REGEX_KEEPALIVE_URL.search(auth_resp.text)
+                    if not km:
+                        km = REGEX_FGTAUTH_URL.search(auth_resp.text)
+                    if km:
+                        base = post_url.rsplit('/', 1)[0]
+                        keepalive_url = f"{base}/keepalive?{km.group(1)}"
+                        self.log(f"Keepalive URL from HTML body: {keepalive_url}")
+
+            # Re-probe to confirm internet access with retry/grace period for firewall rules to take effect
+            auth_ok = False
+            verify_inconclusive = False
+            # Campus networks (OPNsense/pfSense) can take up to 8-10 seconds to update pf tables and unblock DNS.
+            max_verif_retries = 6 if is_opnsense else 3
+            verif_delay = 1.5 if is_opnsense else 0.5
+            for retry_idx in range(max_verif_retries):
+                try:
+                    time.sleep(verif_delay)  # Allow firewall NAT/pf table rules to populate
+                    verify_resp = self.session.get(probe_url, allow_redirects=True,
+                                                   timeout=AppConstants.PROBE_HTTP_TIMEOUT, verify=False)
+                    # Positive verification: HTTP 204 from standard probe endpoint
+                    if verify_resp.status_code == 204:
+                        auth_ok = True
+                        break
+                    elif verify_resp.status_code == 200:
+                        v_url = verify_resp.url or ""
+                        # Bug 1 fix: Do not accept re-displayed login pages as success
+                        is_portal_redirect = (
+                            ":8000" in v_url or "captiveportal" in v_url or "fgtauth" in v_url or
+                            "magic" in v_url or "inputUsername" in verify_resp.text or
+                            "login" in v_url.lower() or "authentication" in verify_resp.text.lower()
+                        )
+                        if not is_portal_redirect and len(verify_resp.content) > 0:
+                            auth_ok = True
+                            break
+                    
+                    self.log(f"Post-auth verification attempt {retry_idx + 1}/{max_verif_retries} returned HTTP {verify_resp.status_code} ({verify_resp.url}). Retrying...")
+                except Exception as verify_err:
+                    verify_inconclusive = True
+                    self.log(f"Post-auth verification attempt {retry_idx + 1}/{max_verif_retries} waiting for firewall/DNS ({verify_err})...")
+
+            # If HTTP probe was inconclusive, check OPNsense status API directly
+            if not auth_ok and is_opnsense:
+                try:
+                    status_url = f"{self.portal_scheme}://{self.portal_host}:{self.portal_port}/api/captiveportal/access/status/"
+                    st_resp = self.session.post(status_url, data={"user": "", "password": ""},
+                                                headers={"X-Requested-With": "XMLHttpRequest"},
+                                                timeout=6.0, verify=False)
+                    self._unsecure_portal_cookies()
+                    if st_resp.status_code == 200 and st_resp.json().get("clientState") == "AUTHORIZED":
+                        self.log("OPNsense status API confirmed: clientState is AUTHORIZED (firewall rules active).")
+                        auth_ok = True
+                        st_json = st_resp.json()
+                        if st_json.get("sessionId"):
+                            self.portal_session_id = st_json.get("sessionId")
+                    elif auth_success and not api_explicit_rejection:
+                        self.log("OPNsense logon API was AUTHORIZED. Treating session as active.")
+                        auth_ok = True
+                except Exception as st_err:
+                    self.log(f"OPNsense status API fallback check error: {st_err}")
+                    if auth_success and not api_explicit_rejection:
+                        auth_ok = True
+
+            # Final sign-out race check before recording Connected status
+            with self.state_lock:
+                if self.user_signed_out:
+                    self.log("Session discarded: User signed out.")
+                    return False
+
+            if auth_ok:
+                with self.state_lock:
+                    self.keepalive_url = keepalive_url
+                    self.session_start = time.time()
+                
+                # Persist active token, gateway, and portal parameters (Bug 11, Bug 13, N1)
+                if self.current_magic:
+                    self.update_config("last_magic", self.current_magic, save=False)
+                self.update_config("last_gateway", self.gateway_ip, save=False)
+                self.update_config("portal_host", self.portal_host, save=False)
+                self.update_config("portal_port", self.portal_port, save=False)
+                self.update_config("portal_scheme", self.portal_scheme, save=True)
+
+                self.set_status("Connected")
+                if keepalive_url:
+                    self.log(f"Connection authorized by firewall for {profile['username']}! (Keepalive registered)")
+                else:
+                    self.log(f"Connection authorized by firewall for {profile['username']}! (Direct probe verified)")
+                self.alert("ok")
+
+                # Feature 5: Automated DNS-over-HTTPS (DoH) Telemetry & Check
+                if self.config.get("doh_fallback_enabled", False):
+                    threading.Thread(target=self._verify_doh_resolution, daemon=True).start()
+
+                # Trigger immediate portal daily quota sync
+                if is_opnsense or self.portal_port == 8000:
+                    threading.Thread(target=lambda: self.query_portal_usage(force=True), daemon=True).start()
+
+                return True
+            else:
+                with self.state_lock:
+                    self.session_start = None
+                if verify_inconclusive and not auth_ok:
+                    self.set_status("Probe Timeout")
+                    self.log("[Auth] Network verification probe timed out after login. Retrying next cycle...")
+                    return False
+                else:
+                    self.set_status("Login Rejected")
+                    self.log("Credentials rejected or access not permitted by portal. Verify username/password.")
+                    self.alert("fail")
+                    return False
+
+        except RequestException as e:
+            with self.state_lock:
+                self.session_start = None
+            self.set_status("Disconnected")
+            err_str = str(e)
+            if "NameResolutionError" in err_str or "getaddrinfo failed" in err_str:
+                self.log("[Probe] Network offline or DNS resolving paused (waiting for Wi-Fi connection)...")
+            elif "Connection refused" in err_str:
+                self.log(f"[Probe] Connection refused by portal/gateway ({self.gateway_ip}).")
+            elif "ConnectTimeout" in err_str or "timed out" in err_str:
+                self.log(f"[Probe] Probe request timed out (gateway {self.gateway_ip} unreachable).")
+            else:
+                self.log(f"Portal network error: {e}")
+            return False
+        except (KeyError, ValueError) as e:
+            with self.state_lock:
+                self.session_start = None
+            self.set_status("Error")
+            self.log(f"Data format error: {e}")
+            return False
+
+    def _ping_keepalive(self) -> None:
+        with self.state_lock:
+            url = self.keepalive_url
+        if not url:
+            return
+        t0 = time.time()
+        try:
+            self.log("Dispatching keepalive ping...")
+            verify_opt = self.get_verify_tls(url)
+            with self.session_lock:
+                self._unsecure_portal_cookies()
+                if "/api/captiveportal/" in url:
+                    # OPNsense status check ping
+                    headers = {"X-Requested-With": "XMLHttpRequest"}
+                    r = self.session.post(url, data={"user": "", "password": ""}, headers=headers,
+                                          timeout=AppConstants.KEEPALIVE_HTTP_TIMEOUT, verify=verify_opt)
+                    self._unsecure_portal_cookies()
+                else:
+                    # For FortiGate: ping keepalive endpoint without following redirects (an expired session 302-redirects to login)
+                    r = self.session.get(url, timeout=AppConstants.KEEPALIVE_HTTP_TIMEOUT, allow_redirects=False, verify=verify_opt)
+            rtt_ms = int((time.time() - t0) * 1000)
+            if "/api/captiveportal/" in url:
+                is_authorized = False
+                try:
+                    r_json = r.json()
+                    is_authorized = (r_json.get("clientState") == "AUTHORIZED")
+                    if r_json.get("sessionId"):
+                        self.portal_session_id = r_json.get("sessionId")
+                except Exception:
+                    is_authorized = (r.status_code == 200)
+
+                if is_authorized:
+                    self.keepalive_consecutive_successes += 1
+                    self.keepalive_consecutive_failures = 0
+                    self.log(f"OPNsense session verified active ({rtt_ms}ms).")
+
+                    # Direct Portal Quota Sync on Keepalive
+                    if self.config.get("portal_usage_sync", True):
+                        threading.Thread(target=lambda: self.query_portal_usage(session_id=self.portal_session_id), daemon=True).start()
+
+                    # Real WAN keepalive: OPNsense idle accounting only measures packets traversing the WAN gateway.
+                    # Send a lightweight HTTP GET to reset the firewall's idle timer and prevent idle dropouts.
+                    try:
+                        self.session.get(AppConstants.PROBE_URL, timeout=3.0, verify=False)
+                    except Exception:
+                        pass
+                    return
+                else:
+                    self.keepalive_consecutive_failures += 1
+                    self.log(f"OPNsense keepalive check returned unauthorized (HTTP {r.status_code}, attempt {self.keepalive_consecutive_failures}/3).")
+                    if self.keepalive_consecutive_failures >= 3:
+                        self.log("OPNsense session lost after 3 failed checks. Resetting session.")
+                        with self.state_lock:
+                            self.keepalive_url = None
+                            self.session_start = None
+                        with _config_lock:
+                            self.config["last_magic"] = ""
+                            save_settings(self.config)
+                        # Check if session was terminated due to quota reached or disconnect rotation
+                        limit_bytes = int(float(self.config.get("daily_quota_limit_gb", 10.0)) * (1024**3))
+                        if self.config.get("auto_rotate_on_disconnect", False) or (self.config.get("auto_rotate_on_quota", True) and self.get_active_profile_daily_total() >= int(0.85 * limit_bytes)):
+                            profiles = self.config.get("profiles", [])
+                            if len(profiles) > 1 and not self.is_auto_rotating:
+                                self.log("[Auto-Rotate] Session dropped while near daily limit. Auto-rotating to next profile...")
+                                self.rotate_to_next_profile(reason="session_dropped_near_quota")
+                    return
+            if r.status_code == 200 and ("keepalive" in r.text.lower() or "ok" in r.text.lower() or len(r.text) < 500):
+                self.keepalive_consecutive_successes += 1
+                self.keepalive_consecutive_failures = 0
+                try:
+                    base_cfg_interval = max(10, int(self.config.get("keepalive_interval", 120)))
+                except (ValueError, TypeError):
+                    base_cfg_interval = 120
+
+                # Feature 4: Adaptive keepalive interval tuning
+                if self.config.get("adaptive_keepalive", True):
+                    # If high latency (>1500ms), step down interval to keep firewall session warm
+                    if rtt_ms > 1500:
+                        self.current_keepalive_interval = max(30, int(self.current_keepalive_interval * 0.75))
+                        self.log(f"Keepalive acknowledged ({rtt_ms}ms, high latency). Scaled interval down to {self.current_keepalive_interval}s.")
+                    elif self.keepalive_consecutive_successes >= 3 and self.current_keepalive_interval < base_cfg_interval:
+                        self.current_keepalive_interval = min(base_cfg_interval, self.current_keepalive_interval + 15)
+                        self.log(f"Keepalive acknowledged ({rtt_ms}ms, stable). Scaled interval up to {self.current_keepalive_interval}s.")
+                    else:
+                        self.log(f"Keepalive acknowledged ({rtt_ms}ms). Next ping in {self.current_keepalive_interval}s.")
+                else:
+                    self.log(f"Keepalive acknowledged ({rtt_ms}ms).")
+            else:
+                self.keepalive_consecutive_failures += 1
+                self.log(f"Keepalive responded with HTTP {r.status_code} (attempt {self.keepalive_consecutive_failures}/3).")
+                if self.keepalive_consecutive_failures >= 3:
+                    self.log("Keepalive failed 3 consecutive times. Resetting session.")
+                    with self.state_lock:
+                        self.keepalive_url = None
+                        self.session_start = None
+                    with _config_lock:
+                        self.config["last_magic"] = ""
+                        save_settings(self.config)
+        except Exception as e:
+            self.keepalive_consecutive_failures += 1
+            self.log(f"Keepalive ping transient failure ({e}) [attempt {self.keepalive_consecutive_failures}/3]")
+            if self.config.get("adaptive_keepalive", True):
+                self.current_keepalive_interval = max(20, self.current_keepalive_interval // 2)
+                self.keepalive_consecutive_successes = 0
+            if self.keepalive_consecutive_failures >= 3:
+                self.log("Keepalive failed after 3 consecutive attempts. Clearing keepalive token.")
+                with self.state_lock:
+                    self.keepalive_url = None
+                    self.session_start = None
+                with _config_lock:
+                    self.config["last_magic"] = ""
+                    save_settings(self.config)
+
+    def _verify_doh_resolution(self) -> None:
+        """
+        Feature 5: Automated DNS-over-HTTPS fallback probe.
+        Verifies whether local UDP 53 resolution is poisoned/blocked by the portal,
+        and tests Cloudflare 1.1.1.1 DoH resolution endpoint.
+        """
+        endpoint = self.config.get("doh_endpoint", "https://1.1.1.1/dns-query")
+        self.log(f"[DoH] Testing DNS-over-HTTPS endpoint ({endpoint})...")
+        t0 = time.time()
+        try:
+            r = requests.get(f"{endpoint}?name=google.com", headers={"accept": "application/dns-json"}, timeout=4.0, verify=False)
+            ms = int((time.time() - t0) * 1000)
+            if r.status_code == 200:
+                data = r.json()
+                if "Answer" in data or data.get("Status") == 0:
+                    self.log(f"[DoH] Cloudflare DoH operational ({ms}ms). Secure external DNS available.")
+                else:
+                    self.log(f"[DoH] Warning: DoH returned 200 but response lacks valid answer (possible gateway interception).")
+            else:
+                self.log(f"[DoH] DoH endpoint returned status {r.status_code}.")
+        except Exception as e:
+            self.log(f"[DoH] DNS-over-HTTPS verification failed: {e}")
+
+    def logout(self, disconnect_wifi: bool = True, pause_auto_reconnect: bool = True) -> None:
+        with self.state_lock:
+            if pause_auto_reconnect:
+                self.user_signed_out = True
+            magic = self.current_magic
+            target_host = self.portal_host if (self.portal_host and self.portal_host != "-") else self.gateway_ip
+            is_opn = (self.portal_type == "opnsense" or self.portal_port == 8000)
+
+        if target_host == "-" or not target_host:
+            gw = get_default_gateway()
+            if gw:
+                target_host = gw
+                with self.state_lock:
+                    self.gateway_ip = gw
+
+        # 1. Terminate session (OPNsense or FortiGate)
+        if target_host and target_host != "-":
+            try:
+                verify_opt = self.get_verify_tls()
+                with self.session_lock:
+                    if is_opn:
+                        logoff_url = f"{self.portal_scheme}://{target_host}:{self.portal_port}/api/captiveportal/access/logoff/"
+                        self.log(f"Terminating OPNsense session: {logoff_url}")
+                        headers = {"X-Requested-With": "XMLHttpRequest"}
+                        self.session.post(logoff_url, data={"user": "", "password": ""}, headers=headers,
+                                          timeout=AppConstants.LOGOUT_HTTP_TIMEOUT, verify=verify_opt)
+                    else:
+                        if not magic:
+                            try:
+                                p_resp = self.session.get(f"http://{target_host}:{self.portal_port}/", timeout=3.0, verify=verify_opt)
+                                km = REGEX_LOGOUT_URL.search(p_resp.text) or REGEX_KEEPALIVE_URL.search(p_resp.text)
+                                if km:
+                                    magic = km.group(1)
+                            except Exception:
+                                pass
+
+                        if magic:
+                            logout_url = f"{self.portal_scheme}://{target_host}:{self.portal_port}/logout?{magic}"
+                            self.log(f"Terminating FortiGate session: {logout_url}")
+                            self.session.get(logout_url, timeout=AppConstants.LOGOUT_HTTP_TIMEOUT, verify=verify_opt)
+                        else:
+                            logout_url = f"{self.portal_scheme}://{target_host}:{self.portal_port}/logout"
+                            self.log(f"Sending brute-force logout request: {logout_url}")
+                            self.session.get(logout_url, timeout=AppConstants.LOGOUT_HTTP_TIMEOUT, verify=verify_opt)
+            except requests.exceptions.ConnectTimeout:
+                self.log(f"Portal target {target_host} unreachable (connection timed out).")
+            except requests.exceptions.ConnectionError as ce:
+                ce_msg = str(ce).lower()
+                if "refused" in ce_msg or "unreachable" in ce_msg or "failed to establish" in ce_msg:
+                    self.log(f"Portal unreachable ({target_host}): connection refused or host down.")
+                else:
+                    self.log("Portal logout request completed.")
+            except (RequestException, Timeout) as e:
+                self.log(f"Portal logout endpoint ping: {e}")
+            except Exception as e:
+                self.log(f"Portal logout endpoint error: {e}")
+
+        # Clear session cookies and reset portal quota session state
+        with self.state_lock:
+            self.portal_session_id = None
+            self.portal_usage_data = None
+            self.portal_usage_source = "local"
+        with self.session_lock:
+            try:
+                self.session.cookies.clear()
+            except Exception:
+                pass
+
+        # 2. Safely Disconnect OS Wi-Fi Adapter (Bulletproof)
+        if disconnect_wifi:
+            try:
+                out = subprocess.check_output(
+                    ["netsh", "wlan", "show", "interfaces"],
+                    text=True, stderr=subprocess.DEVNULL, creationflags=CREATE_NO_WINDOW
+                )
+                for line in out.splitlines():
+                    line_str = line.strip()
+                    if ":" in line_str:
+                        k, v = [x.strip() for x in line_str.split(":", 1)]
+                        k_lower = k.lower()
+                        if "profile" in k_lower and v and v != "Unknown":
+                            self.last_connected_profile = v
+                        elif "ssid" in k_lower and "bssid" not in k_lower and v and v != "Unknown":
+                            self.last_connected_ssid = v
+            except Exception:
+                pass
+
+            try:
+                subprocess.run(
+                    ["netsh", "wlan", "disconnect"], 
+                    capture_output=True, 
+                    creationflags=CREATE_NO_WINDOW,
+                    check=False
+                )
+                self.log("OS global Wi-Fi disconnect dispatched.")
+            except Exception as e:
+                self.log(f"WLAN disconnect error: {e}")
+
+        with self.state_lock:
+            self.keepalive_url = None
+            self.current_magic = None
+            self.session_start = None
+            if pause_auto_reconnect:
+                self.user_signed_out = True
+            else:
+                self.user_signed_out = False
+
+        # Purge cached magic tokens from memory and storage on explicit sign-out or session reset
+        # Note: _config_lock acquired outside state_lock to maintain consistent lock ordering
+        with _config_lock:
+            self.config["last_magic"] = ""
+            save_settings(self.config)
+
+        if pause_auto_reconnect:
+            self.cycle_event.set()
+            self.set_status("Logged Out")
+            self.log("Session signed out. Auto-reconnect paused — click Force Re-Probe to reconnect.")
+        else:
+            self.set_status("Switching Profile...")
+
+# ==========================================
+# MODERN CLEAN WINDOWS GUI & TRAY APP
+# ==========================================
+class GitWifiApp:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("GITwifi - Clean Windows Suite")
+        self._apply_window_geometry()
+
+        self._apply_app_icon()
+        self.log_queue: queue.Queue = queue.Queue()
+        self.status_queue: queue.Queue = queue.Queue()
+        # Queue for callables dispatched from pystray thread → Tkinter main thread (Items 16 & 17)
+        self.tray_action_queue: queue.Queue = queue.Queue()
+        self.editor_mode: str = "new" 
+        self.editing_index: Optional[int] = None
+
+        self.core = GitWifiCore(status_cb=self._on_status, log_cb=self._on_log, profile_switch_cb=self._on_auto_profile_switch, notify_cb=self._on_notify)
+        self.last_notified_state = None
+
+        self._apply_dark_theme()
+        self._build_interface()
+        self._setup_tray_icon()
+        # Item 17: If pystray is available, minimize to tray on close; otherwise offer to quit gracefully
+        if HAS_PYSTRAY and getattr(self, "tray", None):
+            self.root.protocol("WM_DELETE_WINDOW", self.minimize_to_tray)
+        else:
+            self.root.protocol("WM_DELETE_WINDOW", self.quit_app)
+
+        self.root.after(300, self.core.start)
+        self._tick_timer()
+        self._flush_log_queue()
+
+        # Bug 10 fix: If started with --minimized, verify tray icon was actually created before withdrawing
+        if "--minimized" in sys.argv:
+            if getattr(self, "tray", None):
+                self.root.withdraw()
+            else:
+                self.root.iconify()
+
+    def _apply_window_geometry(self):
+        scale = 1.0
+        try:
+            hdc = ctypes.windll.user32.GetDC(0)
+            dpi = ctypes.windll.gdi32.GetDeviceCaps(hdc, 88)
+            ctypes.windll.user32.ReleaseDC(0, hdc)
+            scale = max(1.0, dpi / 96.0)
+        except Exception:
+            scale = 1.0
+
+        sw = self.root.winfo_screenwidth()
+        sh = self.root.winfo_screenheight()
+
+        # On 96 DPI (1.0x): 860x600. On 144 DPI (1.5x): 1020x720. On 192 DPI (2.0x): 1180x820.
+        target_w = 860 + int((scale - 1.0) * 320)
+        target_h = 600 + int((scale - 1.0) * 240)
+
+        # Clamp to max 88% screen width, 84% screen height
+        win_w = min(target_w, int(sw * 0.88))
+        win_h = min(target_h, int(sh * 0.84))
+
+        pos_x = max(0, (sw - win_w) // 2)
+        pos_y = max(0, (sh - win_h) // 2)
+
+        self.root.geometry(f"{win_w}x{win_h}+{pos_x}+{pos_y}")
+
+        # Minimum size: allows compact window without breaking layouts
+        min_w = min(740, int(sw * 0.70))
+        min_h = min(480, int(sh * 0.65))
+        self.root.minsize(min_w, min_h)
+
+    def _create_scrollable_container(self, parent: tk.Widget) -> Tuple[ttk.Frame, tk.Canvas, ttk.Scrollbar]:
+        canvas = tk.Canvas(parent, bg=self.bg, highlightthickness=0, bd=0)
+        scrollbar = ttk.Scrollbar(parent, orient="vertical", command=canvas.yview)
+        scroll_content = ttk.Frame(canvas, style="Card.TFrame")
+
+        def _on_content_configure(event):
+            canvas.configure(scrollregion=canvas.bbox("all"))
+
+        scroll_content.bind("<Configure>", _on_content_configure)
+        canvas_window = canvas.create_window((0, 0), window=scroll_content, anchor="nw")
+
+        def _on_canvas_configure(event):
+            canvas.itemconfig(canvas_window, width=event.width)
+
+        canvas.bind("<Configure>", _on_canvas_configure)
+        canvas.configure(xscrollcommand=None, yscrollcommand=scrollbar.set)
+
+        def _on_mousewheel(event):
+            bbox = canvas.bbox("all")
+            if bbox and (bbox[3] - bbox[1]) > canvas.winfo_height():
+                delta = event.delta
+                if delta != 0:
+                    steps = int(-1 * (delta / 120))
+                    if steps == 0:
+                        steps = -1 if delta > 0 else 1
+                    canvas.yview_scroll(steps, "units")
+
+        def _bind_mw(e):
+            canvas.bind_all("<MouseWheel>", _on_mousewheel)
+        def _unbind_mw(e):
+            canvas.unbind_all("<MouseWheel>")
+
+        canvas.bind("<Enter>", _bind_mw)
+        canvas.bind("<Leave>", _unbind_mw)
+        scroll_content.bind("<Enter>", _bind_mw)
+        scroll_content.bind("<Leave>", _unbind_mw)
+
+        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        return scroll_content, canvas, scrollbar
+
+    def _on_notify(self, title: str, msg: str):
+        if HAS_PYSTRAY and getattr(self, "tray", None) and self.core.config.get("desktop_notifications", True):
+            try:
+                self.tray.notify(msg, title)
+            except Exception:
+                pass
+
+    def _apply_app_icon(self) -> None:
+        icon_path = get_resource_path("app_icon.ico")
+        if not os.path.exists(icon_path) or os.path.getsize(icon_path) < 1000:
+            try:
+                _generate_app_icon(icon_path)
+            except Exception:
+                pass
+
+        # 1. Native Windows Win32 icon loading directly from multi-resolution .ico
+        try:
+            self.root.iconbitmap(default=icon_path)
+        except Exception:
+            try:
+                self.root.iconbitmap(icon_path)
+            except Exception:
+                pass
+
+        # 2. Multi-resolution iconphoto: pass all standard sizes (16, 24, 32, 48, 64, 128, 256)
+        # so Tkinter & Windows Shell use the exact pixel-matched icon for title bar, taskbar & Alt+Tab
+        try:
+            im = Image.open(icon_path)
+            self._icon_photos = []
+            sizes = [16, 24, 32, 48, 64, 128, 256]
+            if hasattr(im, "ico") and hasattr(im.ico, "sizes"):
+                available = im.ico.sizes()
+                for sz in sizes:
+                    if (sz, sz) in available:
+                        frame = im.ico.getimage((sz, sz))
+                    else:
+                        frame = im.resize((sz, sz), Image.Resampling.LANCZOS)
+                    self._icon_photos.append(ImageTk.PhotoImage(frame))
+            else:
+                for sz in sizes:
+                    frame = im.resize((sz, sz), Image.Resampling.LANCZOS)
+                    self._icon_photos.append(ImageTk.PhotoImage(frame))
+
+            if self._icon_photos:
+                self.root.iconphoto(True, *self._icon_photos)
+        except Exception:
+            pass
+
+        # 3. Direct Win32 WM_SETICON for pixel-perfect taskbar rendering on Windows
+        try:
+            self.root.update_idletasks()
+            hwnd = ctypes.windll.user32.GetParent(self.root.winfo_id()) or self.root.winfo_id()
+            if hwnd:
+                IMAGE_ICON = 1
+                LR_LOADFROMFILE = 0x00000010
+                WM_SETICON = 0x0080
+                ICON_SMALL = 0
+                ICON_BIG = 1
+
+                cx_icon = ctypes.windll.user32.GetSystemMetrics(11) # SM_CXICON (taskbar/Alt-Tab: 32 or 48)
+                cy_icon = ctypes.windll.user32.GetSystemMetrics(12)
+                cx_smicon = ctypes.windll.user32.GetSystemMetrics(49) # SM_CXSMICON (titlebar: 16 or 24)
+                cy_smicon = ctypes.windll.user32.GetSystemMetrics(50)
+
+                h_big = ctypes.windll.user32.LoadImageW(None, os.path.abspath(icon_path), IMAGE_ICON, cx_icon, cy_icon, LR_LOADFROMFILE)
+                h_small = ctypes.windll.user32.LoadImageW(None, os.path.abspath(icon_path), IMAGE_ICON, cx_smicon, cy_smicon, LR_LOADFROMFILE)
+
+                if h_big:
+                    ctypes.windll.user32.SendMessageW(hwnd, WM_SETICON, ICON_BIG, h_big)
+                if h_small:
+                    ctypes.windll.user32.SendMessageW(hwnd, WM_SETICON, ICON_SMALL, h_small)
+        except Exception:
+            pass
+
+    def _apply_dark_theme(self):
+        self.bg = "#121316"
+        self.panel = "#1a1b20"
+        self.card = "#22232a"
+        self.accent = "#3d70f5"
+        self.accent_hover = "#2a5cd9"
+        self.fg = "#eaeaea"
+        self.dim = "#9da3ae"
+
+        self.root.configure(bg=self.bg)
+        style = ttk.Style()
+        style.theme_use("clam")
+        style.configure(".", background=self.bg, foreground=self.fg, font=("Segoe UI", 9))
+        style.configure("TNotebook", background=self.bg, borderwidth=0)
+        style.configure("TNotebook.Tab", background=self.panel, foreground=self.fg, padding=[8, 5], font=("Segoe UI", 9, "bold"))
+        style.map("TNotebook.Tab", background=[("selected", self.accent)], foreground=[("selected", "#ffffff")])
+        style.configure("Card.TFrame", background=self.card, relief="flat")
+        style.configure("Card.TLabel", background=self.card, foreground=self.fg)
+        style.configure("Action.TButton", font=("Segoe UI", 9, "bold"), background=self.accent, foreground="#ffffff", padding=[10, 5])
+        style.map("Action.TButton", background=[("active", self.accent_hover)])
+        style.configure("Danger.TButton", font=("Segoe UI", 9, "bold"), background="#d9383a", foreground="#ffffff", padding=[10, 5])
+        style.map("Danger.TButton", background=[("active", "#b8282a")])
+
+        # Dark Theme Combobox Configuration
+        style.configure(
+            "TCombobox",
+            fieldbackground="#1e2026",
+            background="#2d2e38",
+            foreground="#ffffff",
+            arrowcolor="#38bdf8",
+            darkcolor="#1e2026",
+            lightcolor="#2d2e38",
+            bordercolor="#31343f",
+            insertcolor="#ffffff",
+            padding=[6, 4]
+        )
+        style.map(
+            "TCombobox",
+            fieldbackground=[("readonly", "#1e2026"), ("focus", "#252732"), ("hover", "#252732")],
+            background=[("readonly", "#2d2e38"), ("focus", "#3d70f5"), ("hover", "#3d70f5")],
+            foreground=[("readonly", "#ffffff"), ("focus", "#ffffff")],
+            selectbackground=[("readonly", "#1e2026"), ("focus", "#3d70f5")],
+            selectforeground=[("readonly", "#ffffff"), ("focus", "#ffffff")],
+            arrowcolor=[("readonly", "#38bdf8"), ("hover", "#60a5fa")]
+        )
+        self.root.option_add("*TCombobox*Listbox.background", "#1e2026")
+        self.root.option_add("*TCombobox*Listbox.foreground", "#ffffff")
+        self.root.option_add("*TCombobox*Listbox.selectBackground", "#3d70f5")
+        self.root.option_add("*TCombobox*Listbox.selectForeground", "#ffffff")
+        self.root.option_add("*TCombobox*Listbox.font", ("Segoe UI", 9))
+
+        # Dark Theme Scrollbar Configuration
+        style.configure(
+            "Vertical.TScrollbar",
+            background="#2d2e38",
+            troughcolor="#121316",
+            bordercolor="#121316",
+            arrowcolor="#9da3ae",
+            relief="flat"
+        )
+        style.map(
+            "Vertical.TScrollbar",
+            background=[("active", "#3d70f5"), ("pressed", "#2a5cd9")]
+        )
+
+    def _build_interface(self):
+        header = tk.Frame(self.root, bg=self.panel, height=54)
+        header.pack(fill=tk.X, side=tk.TOP)
+
+        lbl = tk.Label(header, text="🌐 GITwifi Native Engine", font=("Segoe UI", 12, "bold"), bg=self.panel, fg="#ffffff")
+        lbl.pack(side=tk.LEFT, padx=16, pady=10)
+
+        self.status_pill = tk.Label(header, text="● Disconnected", font=("Segoe UI", 9, "bold"), bg="#2d2e38", fg="#d9383a", padx=12, pady=4)
+        self.status_pill.pack(side=tk.RIGHT, padx=16)
+
+        self.notebook = ttk.Notebook(self.root)
+        self.notebook.pack(fill=tk.BOTH, expand=True, padx=12, pady=8)
+
+        self.tab_dash = ttk.Frame(self.notebook)
+        self.tab_profiles = ttk.Frame(self.notebook)
+        self.tab_live = ttk.Frame(self.notebook)
+        self.tab_proxy = ttk.Frame(self.notebook)
+        self.tab_diag = ttk.Frame(self.notebook)
+        self.tab_stealth = ttk.Frame(self.notebook)
+        self.tab_settings = ttk.Frame(self.notebook)
+        self.tab_logs = ttk.Frame(self.notebook)
+
+        # Live Network Monitor state
+        self.live_mon_prev_io = get_system_network_io()
+        self.live_mon_prev_time = time.time()
+        self.live_mon_ping_val: Optional[int] = None
+        self.live_mon_loss_val: int = 0
+        self.live_mon_ping_history = []
+        self.live_mon_worker_running = True
+        self.live_mon_wake_event = threading.Event()
+
+        self.notebook.add(self.tab_dash, text="⚡ Dashboard")
+        self.notebook.add(self.tab_profiles, text="👥 Profiles")
+        if self.core.config.get("live_monitor_enabled", True):
+            self.notebook.add(self.tab_live, text="📊 Monitor")
+        self.notebook.add(self.tab_proxy, text="📡 Hotspot")
+        self.notebook.add(self.tab_diag, text="🩺 Diag")
+        self.notebook.add(self.tab_stealth, text="🕵 Stealth")
+        self.notebook.add(self.tab_settings, text="⚙ Settings")
+        self.notebook.add(self.tab_logs, text="📜 Logs")
+
+        self._init_dashboard()
+        self._init_profiles()
+        self._init_live_monitor()
+        self._init_proxy()
+        self._init_diagnostics()
+        self._init_stealth()
+        self._init_settings()
+        self._init_logs()
+
+        # Start background ping/loss worker thread
+        threading.Thread(target=self._live_monitor_ping_worker, daemon=True).start()
+
+    def _init_dashboard(self):
+        content, canvas, scrollbar = self._create_scrollable_container(self.tab_dash)
+        self.dash_canvas = canvas
+
+        card1 = ttk.Frame(content, style="Card.TFrame", padding=14)
+        card1.pack(fill=tk.X, padx=12, pady=(10, 6))
+
+        ttk.Label(card1, text="Session Overview", font=("Segoe UI", 11, "bold"), style="Card.TLabel").grid(row=0, column=0, columnspan=4, sticky=tk.W, pady=(0, 8))
+
+        card1.columnconfigure(1, weight=1)
+        card1.columnconfigure(3, weight=1)
+
+        # Row 1: Active Profile & Daily Quota
+        ttk.Label(card1, text="Active Profile:", style="Card.TLabel").grid(row=1, column=0, sticky=tk.W, pady=3)
+        self.lbl_profile = ttk.Label(card1, text="None", font=("Segoe UI", 9, "bold"), style="Card.TLabel", foreground=self.accent)
+        self.lbl_profile.grid(row=1, column=1, sticky=tk.W, padx=8, pady=3)
+
+        ttk.Label(card1, text="Daily Quota (10 GB Cap):", style="Card.TLabel").grid(row=1, column=2, sticky=tk.W, padx=(16, 0), pady=3)
+        self.lbl_dash_quota = ttk.Label(card1, text="0.00 GB / 10.00 GB (0%)", font=("Segoe UI", 9, "bold"), style="Card.TLabel", foreground="#38bdf8")
+        self.lbl_dash_quota.grid(row=1, column=3, sticky=tk.W, padx=8, pady=3)
+
+        # Row 2: Active Duration & Data Remaining
+        ttk.Label(card1, text="Active Duration:", style="Card.TLabel").grid(row=2, column=0, sticky=tk.W, pady=3)
+        self.lbl_timer = ttk.Label(card1, text="00:00:00", style="Card.TLabel")
+        self.lbl_timer.grid(row=2, column=1, sticky=tk.W, padx=8, pady=3)
+
+        ttk.Label(card1, text="Data Remaining:", style="Card.TLabel").grid(row=2, column=2, sticky=tk.W, padx=(16, 0), pady=3)
+        self.lbl_dash_remaining = ttk.Label(card1, text="10.00 GB Left", font=("Segoe UI", 9, "bold"), style="Card.TLabel", foreground="#2ecc71")
+        self.lbl_dash_remaining.grid(row=2, column=3, sticky=tk.W, padx=8, pady=3)
+
+        # Row 3: Local IPv4 & Network Mode
+        ttk.Label(card1, text="Local IPv4 Address:", style="Card.TLabel").grid(row=3, column=0, sticky=tk.W, pady=3)
+        self.lbl_ip = ttk.Label(card1, text="-", style="Card.TLabel")
+        self.lbl_ip.grid(row=3, column=1, sticky=tk.W, padx=8, pady=3)
+
+        ttk.Label(card1, text="Network Mode:", style="Card.TLabel").grid(row=3, column=2, sticky=tk.W, padx=(16, 0), pady=3)
+        self.net_mode_var = tk.StringVar(value=self._get_net_mode_display(self.core.config.get("network_mode", "auto")))
+        self.cb_net_mode = ttk.Combobox(
+            card1,
+            textvariable=self.net_mode_var,
+            values=["Auto-Detect (Smart)", "Campus Wi-Fi (GIT)", "External Network (Home / Mobile)"],
+            state="readonly",
+            width=24,
+            font=("Segoe UI", 9)
+        )
+        self.cb_net_mode.grid(row=3, column=3, sticky=tk.W, padx=8, pady=3)
+        self.cb_net_mode.bind("<<ComboboxSelected>>", self._on_net_mode_changed)
+
+        # Row 4: Gateway IP & Active Network State
+        ttk.Label(card1, text="Gateway Controller IP:", style="Card.TLabel").grid(row=4, column=0, sticky=tk.W, pady=3)
+        self.lbl_gw = ttk.Label(card1, text="-", style="Card.TLabel")
+        self.lbl_gw.grid(row=4, column=1, sticky=tk.W, padx=8, pady=3)
+
+        ttk.Label(card1, text="Active Environment:", style="Card.TLabel").grid(row=4, column=2, sticky=tk.W, padx=(16, 0), pady=3)
+        self.lbl_mode_detected = ttk.Label(card1, text="", font=("Segoe UI", 9, "bold"), style="Card.TLabel", foreground="#38bdf8")
+        self.lbl_mode_detected.grid(row=4, column=3, sticky=tk.W, padx=8, pady=3)
+
+        # Card 2: Quick Commands
+        card2 = ttk.Frame(content, style="Card.TFrame", padding=14)
+        card2.pack(fill=tk.X, padx=12, pady=6)
+
+        ttk.Label(card2, text="Quick Commands", font=("Segoe UI", 11, "bold"), style="Card.TLabel").pack(anchor=tk.W, pady=(0, 8))
+
+        grid_btns = tk.Frame(card2, bg=self.card)
+        grid_btns.pack(fill=tk.X)
+        for i in range(3):
+            grid_btns.columnconfigure(i, weight=1)
+
+        ttk.Button(grid_btns, text="⚡ Force Re-Probe", style="Action.TButton", command=self._force_probe).grid(row=0, column=0, sticky="ew", padx=3, pady=3)
+        ttk.Button(grid_btns, text="🌐 Toggle Net Mode", style="Action.TButton", command=self._cycle_net_mode_quick).grid(row=0, column=1, sticky="ew", padx=3, pady=3)
+        ttk.Button(grid_btns, text="🔄 Sync Quota", style="Action.TButton", command=self._sync_portal_usage_now).grid(row=0, column=2, sticky="ew", padx=3, pady=3)
+        ttk.Button(grid_btns, text="🔀 Rotate Account", style="Action.TButton", command=self._rotate_profile_now).grid(row=1, column=0, sticky="ew", padx=3, pady=3)
+        ttk.Button(grid_btns, text="🛑 Disconnect & Sign Out", style="Danger.TButton", command=lambda: threading.Thread(target=self.core.logout, daemon=True).start()).grid(row=1, column=1, columnspan=2, sticky="ew", padx=3, pady=3)
+
+    def _init_profiles(self):
+        frame = self.tab_profiles
+        box = ttk.Frame(frame, padding=12)
+        box.pack(fill=tk.BOTH, expand=True)
+
+        left = ttk.Frame(box, style="Card.TFrame", padding=12)
+        left.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 8))
+
+        ttk.Label(left, text="Saved Profiles", font=("Segoe UI", 11, "bold"), style="Card.TLabel").pack(anchor=tk.W, pady=(0, 6))
+
+        self.profiles_lb = tk.Listbox(left, bg=self.bg, fg="#ffffff", selectbackground=self.accent, font=("Segoe UI", 10), bd=0, highlightthickness=1, highlightbackground="#31343f", exportselection=False)
+        self.profiles_lb.pack(fill=tk.BOTH, expand=True, pady=4)
+        self.profiles_lb.bind("<<ListboxSelect>>", self._on_profile_picked)
+
+        r_btns = tk.Frame(left, bg=self.card)
+        r_btns.pack(fill=tk.X, pady=6)
+        ttk.Button(r_btns, text="⭐ Set Active", style="Action.TButton", command=self._set_active_profile).pack(side=tk.LEFT, padx=(0, 6))
+        ttk.Button(r_btns, text="✏️ Edit", style="Action.TButton", command=self._start_edit_profile).pack(side=tk.LEFT, padx=(0, 6))
+        ttk.Button(r_btns, text="🗑 Delete", style="Danger.TButton", command=self._del_profile).pack(side=tk.LEFT, padx=(0, 6))
+        ttk.Button(r_btns, text="🔀 Rotate", style="Action.TButton", command=self._rotate_profile_now).pack(side=tk.LEFT)
+
+        right = ttk.Frame(box, style="Card.TFrame", padding=14)
+        right.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
+
+        top_editor_bar = tk.Frame(right, bg=self.card)
+        top_editor_bar.pack(fill=tk.X, pady=(0, 10))
+
+        self.lbl_editor_mode = ttk.Label(top_editor_bar, text="Mode: [New Profile]", font=("Segoe UI", 11, "bold"), style="Card.TLabel", foreground=self.accent)
+        self.lbl_editor_mode.pack(side=tk.LEFT)
+
+        ttk.Button(top_editor_bar, text="➕ New Profile", style="Action.TButton", command=self._start_new_profile).pack(side=tk.RIGHT)
+
+        ttk.Label(right, text="Profile Name (Label):", style="Card.TLabel").pack(anchor=tk.W, pady=(4, 2))
+        self.e_pname = tk.Entry(right, bg=self.bg, fg="#ffffff", insertbackground="#fff", bd=0, font=("Segoe UI", 10))
+        self.e_pname.pack(fill=tk.X, ipady=4, pady=(0, 8))
+
+        ttk.Label(right, text="Username (Admission / Roll No):", style="Card.TLabel").pack(anchor=tk.W, pady=(4, 2))
+        self.e_puser = tk.Entry(right, bg=self.bg, fg="#ffffff", insertbackground="#fff", bd=0, font=("Segoe UI", 10))
+        self.e_puser.pack(fill=tk.X, ipady=4, pady=(0, 8))
+
+        ttk.Label(right, text="Password:", style="Card.TLabel").pack(anchor=tk.W, pady=(4, 2))
+        self.e_ppass = tk.Entry(right, show="●", bg=self.bg, fg="#ffffff", insertbackground="#fff", bd=0, font=("Segoe UI", 10))
+        self.e_ppass.pack(fill=tk.X, ipady=4, pady=(0, 4))
+
+        self.show_pwd_var = tk.BooleanVar(value=False)
+        self.chk_show_pwd = tk.Checkbutton(
+            right,
+            text="Show Password",
+            variable=self.show_pwd_var,
+            bg=self.card,
+            fg="#ffffff",
+            selectcolor="#121316",
+            activebackground=self.card,
+            activeforeground="#ffffff",
+            font=("Segoe UI", 9),
+            command=self._toggle_password_visibility
+        )
+        self.chk_show_pwd.pack(anchor=tk.W, pady=(0, 6))
+
+        ttk.Label(right, text="Auto-Switch Gateway / Subnet Rule (Optional):", style="Card.TLabel").pack(anchor=tk.W, pady=(4, 2))
+        self.e_pgateway = tk.Entry(right, bg=self.bg, fg="#ffffff", insertbackground="#fff", bd=0, font=("Segoe UI", 10))
+        self.e_pgateway.pack(fill=tk.X, ipady=4, pady=(0, 4))
+        ttk.Label(right, text="e.g. 10.17.0.1 (exact gateway) or 10.17. (subnet prefix)", font=("Segoe UI", 8), style="Card.TLabel", foreground=self.dim).pack(anchor=tk.W, pady=(0, 8))
+
+        self.btn_save_profile = ttk.Button(right, text="💾 Save Profile", style="Action.TButton", command=self._save_profile_fields)
+        self.btn_save_profile.pack(anchor=tk.W)
+
+        self._refresh_profiles_view()
+
+    def _init_proxy(self):
+        scroll_content, canvas, scrollbar = self._create_scrollable_container(self.tab_proxy)
+        frame = scroll_content
+
+        card = ttk.Frame(frame, style="Card.TFrame", padding=14)
+        card.pack(fill=tk.X, padx=12, pady=10)
+
+        ttk.Label(card, text="Hotspot & Multi-Device Internet Sharing", font=("Segoe UI", 12, "bold"), style="Card.TLabel").pack(anchor=tk.W, pady=(0, 6))
+        
+        info = (
+            "Share your authenticated Wi-Fi connection with phones, consoles, smart TVs, or other laptops.\n"
+            "1. Turn on Windows Mobile Hotspot in Windows Settings.\n"
+            "2. Connect other devices to your Windows Hotspot.\n"
+            "3. On their Wi-Fi settings, set Manual Proxy to this PC's IP and Port below."
+        )
+        ttk.Label(card, text=info, wraplength=700, style="Card.TLabel", foreground=self.dim).pack(anchor=tk.W, pady=(0, 14))
+
+        self.proxy_var = tk.BooleanVar(value=self.core.config.get("proxy_enabled", False))
+        tk.Checkbutton(card, text="Enable Local Sharing Proxy Server", variable=self.proxy_var, font=("Segoe UI", 10, "bold"), bg=self.card, fg="#ffffff", selectcolor="#121316", activebackground=self.card, activeforeground="#ffffff", command=self._toggle_proxy).pack(anchor=tk.W, pady=(0, 10))
+
+        ttk.Label(card, text="Proxy Port:", style="Card.TLabel").pack(anchor=tk.W, pady=(4, 2))
+        self.e_proxy_port = tk.Entry(card, bg=self.bg, fg="#ffffff", insertbackground="#fff", bd=0, font=("Segoe UI", 10), width=15)
+        self.e_proxy_port.insert(0, str(self.core.config.get("proxy_port", 8888)))
+        self.e_proxy_port.pack(anchor=tk.W, ipady=4, pady=(0, 12))
+
+        if self.core.proxy_server.running:
+            status_text = f"Proxy is currently: Running on port {self.core.proxy_server.port}"
+        elif self.core.config.get("proxy_enabled", False):
+            # Bug 7: Show "Starting..." at launch before core.start() has fired
+            status_text = "Proxy is currently: Starting..."
+            self.root.after(600, self._refresh_proxy_label)
+        else:
+            status_text = "Proxy is currently: Stopped"
+        self.lbl_proxy_status = ttk.Label(card, text=status_text, font=("Segoe UI", 10, "bold"), style="Card.TLabel", foreground=self.accent)
+        self.lbl_proxy_status.pack(anchor=tk.W, pady=(4, 6))
+
+        # Proxy Traffic Header Sniffing (Diagnostic Mode)
+        self.sniff_var = tk.BooleanVar(value=self.core.config.get("proxy_sniff_headers", False))
+        tk.Checkbutton(
+            card,
+            text="Log HTTP Traffic Metadata (Diagnostic Mode: Host, UA, URI to Live Feed)",
+            variable=self.sniff_var,
+            font=("Segoe UI", 9),
+            bg=self.card,
+            fg="#ffffff",
+            selectcolor="#121316",
+            activebackground=self.card,
+            activeforeground="#ffffff",
+            command=self._toggle_proxy_sniffing
+        ).pack(anchor=tk.W, pady=(0, 10))
+
+        # Feature 3: Data Usage & Live Bandwidth Metering Dashboard
+        meter_card = ttk.Frame(card, style="Card.TFrame", padding=12)
+        meter_card.pack(fill=tk.X, pady=(4, 0))
+
+        ttk.Label(meter_card, text="📊 Live Hotspot Bandwidth & Usage Meter", font=("Segoe UI", 11, "bold"), style="Card.TLabel").pack(anchor=tk.W, pady=(0, 6))
+
+        stats_grid = tk.Frame(meter_card, bg=self.card)
+        stats_grid.pack(fill=tk.X)
+
+        ttk.Label(stats_grid, text="Active Tunnel Clients:", style="Card.TLabel").grid(row=0, column=0, sticky=tk.W, pady=2)
+        self.lbl_proxy_clients = ttk.Label(stats_grid, text="0", font=("Segoe UI", 9, "bold"), style="Card.TLabel", foreground="#5af78e")
+        self.lbl_proxy_clients.grid(row=0, column=1, sticky=tk.W, padx=10, pady=2)
+
+        ttk.Label(stats_grid, text="Total Downloaded (Recv):", style="Card.TLabel").grid(row=1, column=0, sticky=tk.W, pady=2)
+        self.lbl_proxy_recv = ttk.Label(stats_grid, text="0.00 MB", font=("Segoe UI", 9, "bold"), style="Card.TLabel", foreground=self.accent)
+        self.lbl_proxy_recv.grid(row=1, column=1, sticky=tk.W, padx=10, pady=2)
+
+        ttk.Label(stats_grid, text="Total Uploaded (Sent):", style="Card.TLabel").grid(row=2, column=0, sticky=tk.W, pady=2)
+        self.lbl_proxy_sent = ttk.Label(stats_grid, text="0.00 MB", font=("Segoe UI", 9, "bold"), style="Card.TLabel", foreground="#f39c12")
+        self.lbl_proxy_sent.grid(row=2, column=1, sticky=tk.W, padx=10, pady=2)
+
+        ttk.Button(meter_card, text="🔄 Reset Counters", style="Action.TButton", command=self._reset_proxy_counters).pack(anchor=tk.W, pady=(8, 0))
+
+    def _refresh_proxy_label(self):
+        """Update proxy status label once startup completes (Bug 7)."""
+        if hasattr(self, "lbl_proxy_status"):
+            if self.core.proxy_server.running:
+                self.lbl_proxy_status.config(text=f"Proxy is currently: Running on port {self.core.proxy_server.port}")
+            elif self.core.config.get("proxy_enabled", False):
+                self.lbl_proxy_status.config(text="Proxy is currently: Failed to start")
+            else:
+                self.lbl_proxy_status.config(text="Proxy is currently: Stopped")
+
+    def _init_live_monitor(self):
+        scroll_content, canvas, scrollbar = self._create_scrollable_container(self.tab_live)
+        frame = scroll_content
+
+        # Top Metric Cards Grid
+        top_grid = tk.Frame(frame, bg=self.bg)
+        top_grid.pack(fill=tk.X, padx=12, pady=(10, 6))
+
+        # Card 1: Download Speed
+        c_down = ttk.Frame(top_grid, style="Card.TFrame", padding=14)
+        c_down.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 6))
+        ttk.Label(c_down, text="⬇ Download Speed", font=("Segoe UI", 10), style="Card.TLabel", foreground=self.dim).pack(anchor=tk.W)
+        self.lbl_live_down = tk.Label(c_down, text="0.0 KB/s", font=("Segoe UI", 18, "bold"), bg=self.card, fg="#2ecc71")
+        self.lbl_live_down.pack(anchor=tk.W, pady=(4, 0))
+
+        # Card 2: Upload Speed
+        c_up = ttk.Frame(top_grid, style="Card.TFrame", padding=14)
+        c_up.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=3)
+        ttk.Label(c_up, text="⬆ Upload Speed", font=("Segoe UI", 10), style="Card.TLabel", foreground=self.dim).pack(anchor=tk.W)
+        self.lbl_live_up = tk.Label(c_up, text="0.0 KB/s", font=("Segoe UI", 18, "bold"), bg=self.card, fg="#3498db")
+        self.lbl_live_up.pack(anchor=tk.W, pady=(4, 0))
+
+        # Card 3: Ping / Latency
+        c_ping = ttk.Frame(top_grid, style="Card.TFrame", padding=14)
+        c_ping.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=3)
+        ttk.Label(c_ping, text="⚡ Latency (Ping)", font=("Segoe UI", 10), style="Card.TLabel", foreground=self.dim).pack(anchor=tk.W)
+        self.lbl_live_ping = tk.Label(c_ping, text="-- ms", font=("Segoe UI", 18, "bold"), bg=self.card, fg="#f1c40f")
+        self.lbl_live_ping.pack(anchor=tk.W, pady=(4, 0))
+
+        # Card 4: Packet Loss
+        c_loss = ttk.Frame(top_grid, style="Card.TFrame", padding=14)
+        c_loss.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(6, 0))
+        ttk.Label(c_loss, text="📉 Packet Loss", font=("Segoe UI", 10), style="Card.TLabel", foreground=self.dim).pack(anchor=tk.W)
+        self.lbl_live_loss = tk.Label(c_loss, text="0%", font=("Segoe UI", 18, "bold"), bg=self.card, fg="#2ecc71")
+        self.lbl_live_loss.pack(anchor=tk.W, pady=(4, 0))
+
+        # Middle Details Card: Session Data Usage & Network Target
+        card_details = ttk.Frame(frame, style="Card.TFrame", padding=16)
+        card_details.pack(fill=tk.X, padx=14, pady=6)
+
+        ttk.Label(card_details, text="Cumulative Session Network Usage & Telemetry", font=("Segoe UI", 11, "bold"), style="Card.TLabel").grid(row=0, column=0, columnspan=4, sticky=tk.W, pady=(0, 10))
+
+        ttk.Label(card_details, text="Total Received (In):", style="Card.TLabel").grid(row=1, column=0, sticky=tk.W, pady=3)
+        self.lbl_live_total_in = ttk.Label(card_details, text="0.00 MB", font=("Segoe UI", 10, "bold"), style="Card.TLabel")
+        self.lbl_live_total_in.grid(row=1, column=1, sticky=tk.W, padx=10, pady=3)
+
+        ttk.Label(card_details, text="Total Sent (Out):", style="Card.TLabel").grid(row=1, column=2, sticky=tk.W, pady=3)
+        self.lbl_live_total_out = ttk.Label(card_details, text="0.00 MB", font=("Segoe UI", 10, "bold"), style="Card.TLabel")
+        self.lbl_live_total_out.grid(row=1, column=3, sticky=tk.W, padx=10, pady=3)
+
+        ttk.Label(card_details, text="Gateway Ping Target:", style="Card.TLabel").grid(row=2, column=0, sticky=tk.W, pady=3)
+        self.lbl_live_gw_target = ttk.Label(card_details, text="-", style="Card.TLabel")
+        self.lbl_live_gw_target.grid(row=2, column=1, sticky=tk.W, padx=10, pady=3)
+
+        ttk.Label(card_details, text="Portal Controller Target:", style="Card.TLabel").grid(row=2, column=2, sticky=tk.W, pady=3)
+        self.lbl_live_portal_target = ttk.Label(card_details, text="-", style="Card.TLabel")
+        self.lbl_live_portal_target.grid(row=2, column=3, sticky=tk.W, padx=10, pady=3)
+
+        ttk.Label(card_details, text="Daily Quota (10 GB Cap):", style="Card.TLabel").grid(row=3, column=0, sticky=tk.W, pady=(8, 3))
+        self.lbl_live_quota_used = ttk.Label(card_details, text="0.00 GB / 10.00 GB (0%)", font=("Segoe UI", 10, "bold"), style="Card.TLabel", foreground="#38bdf8")
+        self.lbl_live_quota_used.grid(row=3, column=1, sticky=tk.W, padx=10, pady=(8, 3))
+
+        ttk.Label(card_details, text="Data Remaining:", style="Card.TLabel").grid(row=3, column=2, sticky=tk.W, pady=(8, 3))
+        self.lbl_live_quota_remaining = ttk.Label(card_details, text="10.00 GB Left", font=("Segoe UI", 10, "bold"), style="Card.TLabel", foreground="#2ecc71")
+        self.lbl_live_quota_remaining.grid(row=3, column=3, sticky=tk.W, padx=10, pady=(8, 3))
+
+        ttk.Label(card_details, text="Auto-Rotation Status:", style="Card.TLabel").grid(row=4, column=0, sticky=tk.W, pady=(4, 3))
+        self.lbl_live_rotation_status = ttk.Label(card_details, text="Active", font=("Segoe UI", 10, "bold"), style="Card.TLabel", foreground="#2ecc71")
+        self.lbl_live_rotation_status.grid(row=4, column=1, sticky=tk.W, padx=10, pady=(4, 3))
+
+        ttk.Label(card_details, text="Quota Source:", style="Card.TLabel").grid(row=4, column=2, sticky=tk.W, pady=(4, 3))
+        self.lbl_live_quota_source = ttk.Label(card_details, text="Local Adapter (Fallback)", font=("Segoe UI", 10), style="Card.TLabel", foreground="#94a3b8")
+        self.lbl_live_quota_source.grid(row=4, column=3, sticky=tk.W, padx=10, pady=(4, 3))
+
+        self.live_quota_pbar = ttk.Progressbar(card_details, orient=tk.HORIZONTAL, mode='determinate', maximum=100.0)
+        self.live_quota_pbar.grid(row=5, column=0, columnspan=4, sticky=tk.EW, pady=(6, 6))
+
+        # Bottom History Chart / Log Box
+        card_hist = ttk.Frame(frame, style="Card.TFrame", padding=14)
+        card_hist.pack(fill=tk.BOTH, expand=True, padx=14, pady=(6, 12))
+
+        ttk.Label(card_hist, text="Real-Time Ping & Latency Trend", font=("Segoe UI", 11, "bold"), style="Card.TLabel").pack(anchor=tk.W, pady=(0, 6))
+        self.live_mon_box = tk.Text(card_hist, bg=self.bg, fg="#5af78e", font=("Consolas", 9), bd=0, padx=8, pady=8, height=8)
+        self.live_mon_box.pack(fill=tk.BOTH, expand=True)
+        self.live_mon_box.insert(tk.END, "Real-time network telemetry initialized. Polling speed, latency, and packet loss...\n")
+        self.live_mon_box.config(state=tk.DISABLED)
+
+    def _live_monitor_ping_worker(self):
+        """Dedicated background daemon measuring ICMP latency and packet loss."""
+        while self.live_mon_worker_running:
+            try:
+                # Bug 40 fix: If user disabled Live Monitor in settings, don't waste CPU spawning ping.exe
+                if not self.core.config.get("live_monitor_enabled", True):
+                    self.live_mon_wake_event.wait(3.0)
+                    self.live_mon_wake_event.clear()
+                    continue
+
+                # Target Gateway first, fallback to Internet DNS 1.1.1.1
+                gw = self.core.gateway_ip if (self.core.gateway_ip and self.core.gateway_ip != "-") else "1.1.1.1"
+                ping_target = gw
+                cmd = ["ping", "-n", "2", "-w", "800", ping_target]
+                res = subprocess.run(cmd, capture_output=True, text=True, errors="ignore", creationflags=CREATE_NO_WINDOW)
+                out = res.stdout
+
+                # Bug 39 fix: Language-agnostic regex matching for Windows in any regional display language
+                # Match: 'time=12ms', 'time<1ms', 'Average = 12ms', 'Moyenne = 12ms', 'Media = 12ms', etc.
+                m_avg = re.search(r"=\s*(\d+)ms", out, re.IGNORECASE)
+                if not m_avg:
+                    m_avg = re.search(r"[=<](\d+)ms", out, re.IGNORECASE)
+                m_loss = re.search(r"(\d+)%", out)
+
+                # If gateway drops ICMP echo (managed switch protection), test Internet DNS directly
+                if (not m_avg or (m_loss and int(m_loss.group(1)) == 100)) and ping_target != "1.1.1.1":
+                    ping_target = "1.1.1.1"
+                    cmd = ["ping", "-n", "2", "-w", "800", ping_target]
+                    res = subprocess.run(cmd, capture_output=True, text=True, errors="ignore", creationflags=CREATE_NO_WINDOW)
+                    out = res.stdout
+                    m_avg = re.search(r"=\s*(\d+)ms", out, re.IGNORECASE)
+                    if not m_avg:
+                        m_avg = re.search(r"[=<](\d+)ms", out, re.IGNORECASE)
+                    m_loss = re.search(r"(\d+)%", out)
+
+                if m_avg:
+                    self.live_mon_ping_val = int(m_avg.group(1))
+                else:
+                    self.live_mon_ping_val = None
+
+                if m_loss:
+                    self.live_mon_loss_val = int(m_loss.group(1))
+                else:
+                    self.live_mon_loss_val = 100 if self.live_mon_ping_val is None else 0
+
+                ts = time.strftime("%H:%M:%S")
+                lat_str = f"{self.live_mon_ping_val}ms" if self.live_mon_ping_val is not None else "Timeout"
+                target_label = "Gateway" if ping_target == gw else "Internet (1.1.1.1)"
+                entry = f"[{ts}] Ping {target_label}: {lat_str} | Loss: {self.live_mon_loss_val}%\n"
+
+                def _append_ui(line=entry):
+                    if hasattr(self, "live_mon_box"):
+                        self.live_mon_box.config(state=tk.NORMAL)
+                        self.live_mon_box.insert(tk.END, line)
+                        self.live_mon_box.see(tk.END)
+                        # Keep max 50 lines
+                        lines_cnt = int(self.live_mon_box.index("end-1c").split(".")[0])
+                        if lines_cnt > 50:
+                            self.live_mon_box.delete("1.0", "10.0")
+                        self.live_mon_box.config(state=tk.DISABLED)
+
+                self._tray_dispatch(_append_ui)
+
+            except Exception:
+                pass
+            self.live_mon_wake_event.wait(3.0)
+            self.live_mon_wake_event.clear()
+
+    def _init_diagnostics(self):
+        frame = self.tab_diag
+        card = ttk.Frame(frame, style="Card.TFrame", padding=16)
+        card.pack(fill=tk.BOTH, expand=True, padx=14, pady=12)
+
+        ttk.Label(card, text="Real-Time Network Diagnostics", font=("Segoe UI", 12, "bold"), style="Card.TLabel").pack(anchor=tk.W, pady=(0, 8))
+
+        self.btn_diag = ttk.Button(card, text="⚡ Run Comprehensive Health Check", style="Action.TButton", command=self._execute_diag)
+        self.btn_diag.pack(anchor=tk.W, pady=(0, 10))
+
+        self.diag_box = tk.Text(card, bg=self.bg, fg="#5af78e", font=("Consolas", 10), bd=0, padx=10, pady=10)
+        self.diag_box.pack(fill=tk.BOTH, expand=True)
+        self.diag_box.insert(tk.END, "Ready to test latency, gateway ping, DNS, and HTTP/HTTPS access.\n")
+        self.diag_box.config(state=tk.DISABLED)
+
+    def _init_stealth(self):
+        frame = self.tab_stealth
+        card = ttk.Frame(frame, style="Card.TFrame", padding=16)
+        card.pack(fill=tk.BOTH, expand=True, padx=14, pady=12)
+
+        ttk.Label(card, text="Device Fingerprint & Anti-Detection", font=("Segoe UI", 12, "bold"), style="Card.TLabel").pack(anchor=tk.W, pady=(0, 6))
+        desc = "Disguise your device HTTP headers as a mobile phone or another browser to evade desktop tracking or portal rate-limiting policies:"
+        ttk.Label(card, text=desc, wraplength=700, style="Card.TLabel", foreground=self.dim).pack(anchor=tk.W, pady=(0, 12))
+
+        ttk.Label(card, text="Selected User-Agent Fingerprint:", style="Card.TLabel").pack(anchor=tk.W, pady=(4, 2))
+        self.ua_selection = tk.StringVar(value=self.core.config.get("user_agent_mode", "Windows Chrome"))
+        ua_combo = ttk.Combobox(card, textvariable=self.ua_selection, values=list(SPOOF_USER_AGENTS.keys()) + ["Custom"], state="readonly", font=("Segoe UI", 10))
+        ua_combo.pack(anchor=tk.W, fill=tk.X, pady=(0, 10))
+        ua_combo.bind("<<ComboboxSelected>>", self._on_ua_pick)
+
+        ttk.Label(card, text="Header Value (editable when 'Custom' is selected):", style="Card.TLabel").pack(anchor=tk.W, pady=(4, 2))
+        self.ua_preview = tk.Text(card, height=3, bg=self.bg, fg="#ffffff", font=("Consolas", 9), bd=0)
+        self.ua_preview.pack(fill=tk.X, pady=(0, 12))
+        self._refresh_ua_preview()
+
+        ttk.Button(card, text="Save Fingerprint", style="Action.TButton", command=self._commit_stealth).pack(anchor=tk.W)
+
+    def _init_settings(self):
+        scroll_content, canvas, scrollbar = self._create_scrollable_container(self.tab_settings)
+
+        # --- SECTION 1: System & Automation Preferences ---
+        card1 = ttk.Frame(scroll_content, style="Card.TFrame", padding=14)
+        card1.pack(fill=tk.X, padx=12, pady=(10, 6))
+
+        ttk.Label(card1, text="System & Automation Preferences", font=("Segoe UI", 11, "bold"), style="Card.TLabel").pack(anchor=tk.W, pady=(0, 6))
+
+        net_mode_row = tk.Frame(card1, bg=self.card)
+        net_mode_row.pack(anchor=tk.W, pady=(2, 6))
+        ttk.Label(net_mode_row, text="Network Environment Mode:", style="Card.TLabel").pack(side=tk.LEFT, padx=(0, 8))
+        self.settings_net_mode_cb = ttk.Combobox(
+            net_mode_row,
+            textvariable=self.net_mode_var,
+            values=["Auto-Detect (Smart)", "Campus Wi-Fi (GIT)", "External Network (Home / Mobile)"],
+            state="readonly",
+            width=28,
+            font=("Segoe UI", 9)
+        )
+        self.settings_net_mode_cb.pack(side=tk.LEFT)
+        self.settings_net_mode_cb.bind("<<ComboboxSelected>>", self._on_net_mode_changed)
+
+        self.autostart_var = tk.BooleanVar(value=is_auto_start_registered())
+        tk.Checkbutton(card1, text="Start automatically on Windows boot (Silent / Minimized to Tray)", variable=self.autostart_var, bg=self.card, fg="#ffffff", selectcolor="#121316", activebackground=self.card, activeforeground="#ffffff", command=self._toggle_autostart).pack(anchor=tk.W, pady=2)
+
+        self.autoprof_var = tk.BooleanVar(value=self.core.config.get("auto_profile_switching", True))
+        tk.Checkbutton(card1, text="Auto-switch profile based on gateway/subnet match rule", variable=self.autoprof_var, bg=self.card, fg="#ffffff", selectcolor="#121316", activebackground=self.card, activeforeground="#ffffff", command=self._save_toggles).pack(anchor=tk.W, pady=2)
+
+        self.adapt_ka_var = tk.BooleanVar(value=self.core.config.get("adaptive_keepalive", True))
+        tk.Checkbutton(card1, text="Adaptive keepalive tuning (auto-scales interval under high latency)", variable=self.adapt_ka_var, bg=self.card, fg="#ffffff", selectcolor="#121316", activebackground=self.card, activeforeground="#ffffff", command=self._save_toggles).pack(anchor=tk.W, pady=2)
+
+        idle_bar = tk.Frame(card1, bg=self.card)
+        idle_bar.pack(anchor=tk.W, pady=2)
+        self.idle_logout_var = tk.BooleanVar(value=self.core.config.get("idle_logout_enabled", False))
+        tk.Checkbutton(idle_bar, text="Idle auto-logout after user inactivity:", variable=self.idle_logout_var, bg=self.card, fg="#ffffff", selectcolor="#121316", activebackground=self.card, activeforeground="#ffffff", command=self._save_toggles).pack(side=tk.LEFT)
+        self.e_idle_mins = tk.Entry(idle_bar, width=4, bg=self.bg, fg="#ffffff", insertbackground="#fff", bd=0, font=("Segoe UI", 9))
+        self.e_idle_mins.insert(0, str(self.core.config.get("idle_logout_minutes", 30)))
+        self.e_idle_mins.pack(side=tk.LEFT, padx=6)
+        self.e_idle_mins.bind("<FocusOut>", self._save_idle_mins)
+        self.e_idle_mins.bind("<Return>", self._save_idle_mins)
+        ttk.Label(idle_bar, text="minutes", style="Card.TLabel").pack(side=tk.LEFT)
+
+        # --- SECTION 2: Daily Quota & Multi-Account Rotation (10 GB Limit) ---
+        card_quota = ttk.Frame(scroll_content, style="Card.TFrame", padding=14)
+        card_quota.pack(fill=tk.X, padx=12, pady=6)
+
+        ttk.Label(card_quota, text="Daily Quota & Multi-Account Rotation (10 GB Limit)", font=("Segoe UI", 11, "bold"), style="Card.TLabel").pack(anchor=tk.W, pady=(0, 4))
+        ttk.Label(card_quota, text="Campus firewall enforces a 10 GB daily bandwidth limit per account. Auto-rotation switches to backup profiles seamlessly.", font=("Segoe UI", 8), style="Card.TLabel", foreground=self.dim).pack(anchor=tk.W, pady=(0, 6))
+
+        self.auto_rotate_quota_var = tk.BooleanVar(value=self.core.config.get("auto_rotate_on_quota", True))
+        tk.Checkbutton(card_quota, text="Auto-rotate to next profile when daily quota limit (10 GB) is reached", variable=self.auto_rotate_quota_var, bg=self.card, fg="#ffffff", selectcolor="#121316", activebackground=self.card, activeforeground="#ffffff", command=self._save_toggles).pack(anchor=tk.W, pady=2)
+
+        self.auto_rotate_disc_var = tk.BooleanVar(value=self.core.config.get("auto_rotate_on_disconnect", False))
+        tk.Checkbutton(card_quota, text="Auto-rotate to next profile on repeated login rejections or sudden disconnects", variable=self.auto_rotate_disc_var, bg=self.card, fg="#ffffff", selectcolor="#121316", activebackground=self.card, activeforeground="#ffffff", command=self._save_toggles).pack(anchor=tk.W, pady=2)
+
+        self.portal_usage_sync_var = tk.BooleanVar(value=self.core.config.get("portal_usage_sync", True))
+        tk.Checkbutton(card_quota, text="Direct Portal Usage Sync (Queries real-time data used & remaining from captive portal API with local fallback)", variable=self.portal_usage_sync_var, bg=self.card, fg="#ffffff", selectcolor="#121316", activebackground=self.card, activeforeground="#ffffff", command=self._save_toggles).pack(anchor=tk.W, pady=2)
+
+        quota_cfg_bar = tk.Frame(card_quota, bg=self.card)
+        quota_cfg_bar.pack(fill=tk.X, pady=4)
+        ttk.Label(quota_cfg_bar, text="Daily Quota Limit per Account:", style="Card.TLabel").pack(side=tk.LEFT)
+        self.e_quota_gb = tk.Entry(quota_cfg_bar, width=5, bg=self.bg, fg="#ffffff", insertbackground="#fff", bd=0, font=("Segoe UI", 9))
+        self.e_quota_gb.insert(0, str(self.core.config.get("daily_quota_limit_gb", 10.0)))
+        self.e_quota_gb.pack(side=tk.LEFT, padx=6)
+        ttk.Label(quota_cfg_bar, text="GB", style="Card.TLabel").pack(side=tk.LEFT, padx=(0, 10))
+        ttk.Button(quota_cfg_bar, text="Apply Quota Limit", style="Action.TButton", command=self._save_quota_limit).pack(side=tk.LEFT, padx=(0, 8))
+        ttk.Button(quota_cfg_bar, text="🔄 Sync Portal Usage", style="Action.TButton", command=self._sync_portal_usage_now).pack(side=tk.LEFT, padx=(0, 8))
+        ttk.Button(quota_cfg_bar, text="🧹 Reset Today's Usage", style="Danger.TButton", command=self._reset_today_usage).pack(side=tk.LEFT)
+
+        # --- SECTION 3: Network & DNS Preferences ---
+        card2 = ttk.Frame(scroll_content, style="Card.TFrame", padding=14)
+        card2.pack(fill=tk.X, padx=12, pady=6)
+
+        ttk.Label(card2, text="Network, DNS & Probe Endpoints", font=("Segoe UI", 11, "bold"), style="Card.TLabel").pack(anchor=tk.W, pady=(0, 6))
+
+        self.doh_var = tk.BooleanVar(value=self.core.config.get("doh_fallback_enabled", False))
+        tk.Checkbutton(card2, text="Automated DNS-over-HTTPS fallback (Cloudflare 1.1.1.1 DoH when UDP DNS 53 is blocked)", variable=self.doh_var, bg=self.card, fg="#ffffff", selectcolor="#121316", activebackground=self.card, activeforeground="#ffffff", command=self._save_toggles).pack(anchor=tk.W, pady=2)
+
+        probe_bar = tk.Frame(card2, bg=self.card)
+        probe_bar.pack(fill=tk.X, pady=4)
+        ttk.Label(probe_bar, text="Base Keepalive Interval:", style="Card.TLabel").pack(side=tk.LEFT)
+        self.e_ka_interval = tk.Entry(probe_bar, width=5, bg=self.bg, fg="#ffffff", insertbackground="#fff", bd=0, font=("Segoe UI", 9))
+        self.e_ka_interval.insert(0, str(self.core.config.get("keepalive_interval", 120)))
+        self.e_ka_interval.pack(side=tk.LEFT, padx=6)
+        ttk.Label(probe_bar, text="seconds (recommended: 60 - 180s)", font=("Segoe UI", 8), style="Card.TLabel", foreground=self.dim).pack(side=tk.LEFT)
+        ttk.Button(probe_bar, text="Apply", style="Action.TButton", command=self._save_keepalive_interval).pack(side=tk.RIGHT)
+
+        # --- SECTION 3: Trusted Portal Hosts Whitelist ---
+        card3 = ttk.Frame(scroll_content, style="Card.TFrame", padding=14)
+        card3.pack(fill=tk.X, padx=12, pady=6)
+
+        ttk.Label(card3, text="Trusted Portal Redirect Hosts (Whitelist)", font=("Segoe UI", 11, "bold"), style="Card.TLabel").pack(anchor=tk.W, pady=(0, 4))
+        ttk.Label(card3, text="Captive portal redirects will only be authenticated if they match your gateway or a domain in this list.", font=("Segoe UI", 8), style="Card.TLabel", foreground=self.dim).pack(anchor=tk.W, pady=(0, 6))
+
+        hosts_frame = tk.Frame(card3, bg=self.card)
+        hosts_frame.pack(fill=tk.X, pady=2)
+
+        self.hosts_lb = tk.Listbox(hosts_frame, height=3, bg=self.bg, fg="#ffffff", selectbackground=self.accent, font=("Consolas", 9), bd=0)
+        self.hosts_lb.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 8))
+
+        hosts_btns = tk.Frame(hosts_frame, bg=self.card)
+        hosts_btns.pack(side=tk.RIGHT, fill=tk.Y)
+
+        self.e_new_host = tk.Entry(card3, bg=self.bg, fg="#ffffff", insertbackground="#fff", bd=0, font=("Segoe UI", 9))
+        self.e_new_host.pack(fill=tk.X, pady=(6, 4))
+
+        host_action_bar = tk.Frame(card3, bg=self.card)
+        host_action_bar.pack(fill=tk.X)
+        ttk.Button(host_action_bar, text="➕ Add Host", style="Action.TButton", command=self._add_trusted_host).pack(side=tk.LEFT, padx=(0, 6))
+        ttk.Button(host_action_bar, text="🗑 Remove Selected", style="Danger.TButton", command=self._remove_trusted_host).pack(side=tk.LEFT)
+
+        self._refresh_trusted_hosts()
+
+        # --- SECTION 4: Audio & Notifications ---
+        card4 = ttk.Frame(scroll_content, style="Card.TFrame", padding=14)
+        card4.pack(fill=tk.X, padx=12, pady=6)
+
+        ttk.Label(card4, text="Audio & Alert Preferences", font=("Segoe UI", 11, "bold"), style="Card.TLabel").pack(anchor=tk.W, pady=(0, 6))
+
+        self.snd_var = tk.BooleanVar(value=self.core.config.get("sound_alerts", True))
+        tk.Checkbutton(card4, text="Audible chimes on connection state changes", variable=self.snd_var, bg=self.card, fg="#ffffff", selectcolor="#121316", activebackground=self.card, activeforeground="#ffffff", command=self._save_toggles).pack(anchor=tk.W, pady=2)
+
+        self.ntf_var = tk.BooleanVar(value=self.core.config.get("desktop_notifications", True))
+        tk.Checkbutton(card4, text="Desktop tray notifications", variable=self.ntf_var, bg=self.card, fg="#ffffff", selectcolor="#121316", activebackground=self.card, activeforeground="#ffffff", command=self._save_toggles).pack(anchor=tk.W, pady=2)
+
+        self.live_mon_var = tk.BooleanVar(value=self.core.config.get("live_monitor_enabled", True))
+        tk.Checkbutton(card4, text="Enable Live Network Monitor Tab (Speed, Ping, Packet Loss, Data Usage)", variable=self.live_mon_var, bg=self.card, fg="#ffffff", selectcolor="#121316", activebackground=self.card, activeforeground="#ffffff", command=self._toggle_live_monitor_tab).pack(anchor=tk.W, pady=2)
+
+        # --- SECTION 5: Backup, Restore & Quick Diagnostics Tools ---
+        card5 = ttk.Frame(scroll_content, style="Card.TFrame", padding=14)
+        card5.pack(fill=tk.X, padx=12, pady=(6, 14))
+
+        ttk.Label(card5, text="Configuration Backup & Windows System Tools", font=("Segoe UI", 11, "bold"), style="Card.TLabel").pack(anchor=tk.W, pady=(0, 8))
+
+        tools_bar = tk.Frame(card5, bg=self.card)
+        tools_bar.pack(fill=tk.X, pady=2)
+
+        ttk.Button(tools_bar, text="💾 Backup Config (JSON)", style="Action.TButton", command=self._export_config).pack(side=tk.LEFT, padx=(0, 6))
+        ttk.Button(tools_bar, text="📂 Restore Config", style="Action.TButton", command=self._import_config).pack(side=tk.LEFT, padx=(0, 6))
+        ttk.Button(tools_bar, text="🧹 Flush Windows DNS", style="Action.TButton", command=self._flush_windows_dns).pack(side=tk.LEFT, padx=(0, 6))
+        ttk.Button(tools_bar, text="📋 Copy Network Details", style="Action.TButton", command=self._copy_network_details).pack(side=tk.LEFT)
+
+    def _refresh_trusted_hosts(self):
+        if not hasattr(self, "hosts_lb"):
+            return
+        self.hosts_lb.delete(0, tk.END)
+        hosts = self.core.config.get("trusted_portal_hosts", [])
+        for h in hosts:
+            self.hosts_lb.insert(tk.END, h)
+
+    def _add_trusted_host(self):
+        raw = self.e_new_host.get().strip().lower()
+        if not raw:
+            return
+        # Bug 30 fix: Normalize input (e.g. http://172.15.1.2:8000/ -> 172.15.1.2)
+        if "://" in raw:
+            parsed = urlsplit(raw)
+            h = parsed.hostname or raw
+        else:
+            h = raw.split("/")[0].split(":")[0]
+        h = h.strip("[]")
+        if not h:
+            return
+
+        with _config_lock:
+            hosts = self.core.config.get("trusted_portal_hosts", [])
+            if h not in hosts:
+                hosts.append(h)
+                self.core.config["trusted_portal_hosts"] = hosts
+                save_settings(self.core.config)
+                self.core.log(f"[Security] Added normalized host '{h}' to trusted portal hosts allow-list.")
+        self.e_new_host.delete(0, tk.END)
+        self._refresh_trusted_hosts()
+
+    def _remove_trusted_host(self):
+        sel = self.hosts_lb.curselection()
+        if not sel:
+            return
+        idx = sel[0]
+        with _config_lock:
+            hosts = self.core.config.get("trusted_portal_hosts", [])
+            if 0 <= idx < len(hosts):
+                removed = hosts.pop(idx)
+                self.core.config["trusted_portal_hosts"] = hosts
+                save_settings(self.core.config)
+                self.core.log(f"[Security] Removed '{removed}' from trusted portal hosts allow-list.")
+        self._refresh_trusted_hosts()
+
+    def _save_keepalive_interval(self):
+        val_text = self.e_ka_interval.get().strip()
+        try:
+            val = int(val_text)
+            if not (10 <= val <= 600):
+                raise ValueError("Must be between 10 and 600 seconds.")
+            with _config_lock:
+                self.core.config["keepalive_interval"] = val
+                self.core.current_keepalive_interval = val
+                save_settings(self.core.config)
+            self.core.log(f"[Config] Keepalive interval updated to {val}s.")
+            messagebox.showinfo("Settings", f"Keepalive interval updated to {val}s.")
+        except ValueError as e:
+            messagebox.showerror("Invalid Interval", f"Invalid keepalive interval: {e}")
+
+    def _save_idle_mins(self, event=None):
+        val_text = self.e_idle_mins.get().strip()
+        try:
+            val = int(val_text)
+            if not (1 <= val <= 720):
+                raise ValueError("Must be between 1 and 720 minutes.")
+            with _config_lock:
+                self.core.config["idle_logout_minutes"] = val
+                save_settings(self.core.config)
+            self.core.log(f"[Config] Idle logout threshold updated to {val}m.")
+        except ValueError as e:
+            # Revert to last valid config value on invalid input
+            valid_val = self.core.config.get("idle_logout_minutes", 30)
+            self.e_idle_mins.delete(0, tk.END)
+            self.e_idle_mins.insert(0, str(valid_val))
+
+    def _save_quota_limit(self):
+        val_text = self.e_quota_gb.get().strip()
+        try:
+            val = max(0.1, float(val_text))
+            with _config_lock:
+                self.core.config["daily_quota_limit_gb"] = val
+                save_settings(self.core.config)
+            self.core.log(f"[Config] Daily account quota limit updated to {val:.1f} GB.")
+            messagebox.showinfo("Quota Limit Saved", f"Daily quota limit set to {val:.1f} GB per account.")
+            self._refresh_profiles_view()
+        except ValueError:
+            messagebox.showerror("Invalid Input", "Please enter a valid numeric value for the daily quota limit.")
+
+    def _reset_today_usage(self):
+        if messagebox.askyesno("Reset Usage", "Reset all profile bandwidth usage counters recorded for today?"):
+            today_str = datetime.date.today().isoformat()
+            with self.core.quota_lock:
+                with _config_lock:
+                    if "daily_usage_tracking" in self.core.config and isinstance(self.core.config["daily_usage_tracking"], dict):
+                        self.core.config["daily_usage_tracking"][today_str] = {}
+                        save_settings(self.core.config)
+            self.core.portal_usage_data = None
+            self.core.portal_usage_source = "local"
+            self.core.quota_warning_sent_80.clear()
+            self.core.quota_warning_sent_95.clear()
+            self.core.log("[Quota] Reset today's usage statistics across all accounts.")
+            self._refresh_profiles_view()
+
+    def _export_config(self):
+        dest = filedialog.asksaveasfilename(
+            title="Backup GITwifi Configuration",
+            defaultextension=".json",
+            filetypes=[("JSON files", "*.json"), ("All files", "*.*")],
+            initialfile=f"gitwifi_config_backup_{int(time.time())}.json"
+        )
+        if not dest:
+            return
+        try:
+            # Bug 27 fix: If config.json doesn't exist on disk yet, save current in-memory config
+            with _config_lock:
+                save_settings(self.core.config)
+            with open(CONFIG_PATH, "r", encoding="utf-8-sig") as f_in:
+                data = json.load(f_in)
+            # Remove transient session tokens from exported file
+            data.pop("last_magic", None)
+            data.pop("_last_magic_raw", None)
+            with open(dest, "w", encoding="utf-8") as f_out:
+                json.dump(data, f_out, indent=4)
+            self.core.log(f"[Config] Backup saved to: {dest}")
+            messagebox.showinfo("Backup Success", f"Configuration backup saved successfully to:\n{dest}")
+        except Exception as e:
+            messagebox.showerror("Backup Error", f"Failed to save backup: {e}")
+
+    def _import_config(self):
+        src = filedialog.askopenfilename(
+            title="Restore GITwifi Configuration",
+            filetypes=[("JSON files", "*.json"), ("All files", "*.*")]
+        )
+        if not src:
+            return
+        if not messagebox.askyesno("Confirm Restore", "Restoring configuration will overwrite current settings and reload profiles. Continue?"):
+            return
+        try:
+            with open(src, "r", encoding="utf-8-sig") as f:
+                loaded = json.load(f)
+            if not isinstance(loaded, dict) or "profiles" not in loaded:
+                raise ValueError("Invalid configuration file format.")
+            
+            with _config_lock:
+                shutil.copy2(src, CONFIG_PATH)
+                new_cfg = load_settings()
+                self.core.config = new_cfg
+
+            # Bug 26 fix: Refresh all UI controls and variables with the newly restored configuration
+            self._refresh_profiles_view()
+            self._refresh_trusted_hosts()
+            if hasattr(self, "doh_var"):
+                self.doh_var.set(new_cfg.get("doh_fallback_enabled", False))
+            if hasattr(self, "snd_var"):
+                self.snd_var.set(new_cfg.get("sound_alerts", True))
+            if hasattr(self, "ntf_var"):
+                self.ntf_var.set(new_cfg.get("desktop_notifications", True))
+            if hasattr(self, "live_mon_var"):
+                self.live_mon_var.set(new_cfg.get("live_monitor_enabled", True))
+            if hasattr(self, "autoprof_var"):
+                self.autoprof_var.set(new_cfg.get("auto_profile_switching", True))
+            if hasattr(self, "adapt_ka_var"):
+                self.adapt_ka_var.set(new_cfg.get("adaptive_keepalive", True))
+            if hasattr(self, "idle_logout_var"):
+                self.idle_logout_var.set(new_cfg.get("idle_logout_enabled", False))
+            if hasattr(self, "e_ka_interval"):
+                self.e_ka_interval.delete(0, tk.END)
+                self.e_ka_interval.insert(0, str(new_cfg.get("keepalive_interval", 120)))
+            if hasattr(self, "e_idle_mins"):
+                self.e_idle_mins.delete(0, tk.END)
+                self.e_idle_mins.insert(0, str(new_cfg.get("idle_logout_minutes", 30)))
+            if hasattr(self, "auto_rotate_quota_var"):
+                self.auto_rotate_quota_var.set(new_cfg.get("auto_rotate_on_quota", True))
+            if hasattr(self, "auto_rotate_disc_var"):
+                self.auto_rotate_disc_var.set(new_cfg.get("auto_rotate_on_disconnect", False))
+            if hasattr(self, "e_quota_gb"):
+                self.e_quota_gb.delete(0, tk.END)
+                self.e_quota_gb.insert(0, str(new_cfg.get("daily_quota_limit_gb", 10.0)))
+            if hasattr(self, "ua_selection"):
+                self.ua_selection.set(new_cfg.get("spoof_ua_mode", "Windows Chrome"))
+                self._refresh_ua_preview()
+            if hasattr(self, "sniff_var"):
+                self.sniff_var.set(new_cfg.get("proxy_sniff_headers", False))
+                self.core.proxy_server.sniff_headers = new_cfg.get("proxy_sniff_headers", False)
+            if hasattr(self, "e_proxy_port"):
+                self.e_proxy_port.delete(0, tk.END)
+                self.e_proxy_port.insert(0, str(new_cfg.get("proxy_port", 8888)))
+            if hasattr(self, "proxy_var"):
+                desired_proxy = new_cfg.get("proxy_enabled", False)
+                self.proxy_var.set(desired_proxy)
+                self._toggle_proxy()
+
+            self.core.log("[Config] Configuration restored successfully from backup.")
+            messagebox.showinfo("Restore Success", "Configuration successfully imported and reloaded.")
+        except Exception as e:
+            messagebox.showerror("Restore Error", f"Failed to import configuration: {e}")
+
+    def _flush_windows_dns(self):
+        try:
+            res = subprocess.run(["ipconfig", "/flushdns"], capture_output=True, text=True, creationflags=CREATE_NO_WINDOW, check=False)
+            if res.returncode == 0:
+                self.core.log("[System] Windows DNS Resolver Cache flushed successfully (ipconfig /flushdns).")
+                messagebox.showinfo("DNS Flushed", "Windows DNS Resolver Cache successfully flushed.")
+            else:
+                self.core.log(f"[System] Windows DNS flush exited with error code {res.returncode}: {res.stderr or res.stdout}")
+                messagebox.showwarning("DNS Flush Notice", f"DNS flush command returned code {res.returncode}.\n{res.stderr or res.stdout}")
+        except Exception as e:
+            self.core.log(f"[System] Failed to execute DNS cache flush: {e}")
+            messagebox.showerror("DNS Flush Error", f"Failed to execute DNS cache flush: {e}")
+
+    def _copy_network_details(self):
+        ka_url = self.core.keepalive_url or "None"
+        if ka_url != "None" and "?" in ka_url:
+            base_url, _ = ka_url.split("?", 1)
+            ka_url = f"{base_url}?[REDACTED_TOKEN]"
+
+        info_lines = [
+            f"Local IPv4:       {self.core.local_ip}",
+            f"Default Gateway:  {self.core.gateway_ip}",
+            f"Portal Host:      {self.core.portal_host}:{self.core.portal_port}",
+            f"Connection State: {self.core.status}",
+            f"Keepalive URL:    {ka_url}"
+        ]
+        text = "\n".join(info_lines)
+        self.root.clipboard_clear()
+        self.root.clipboard_append(text)
+        self.core.log("[System] Network configuration details copied to Windows clipboard.")
+        messagebox.showinfo("Copied", "Network details copied to clipboard:\n\n" + text)
+
+    def _init_logs(self):
+        frame = self.tab_logs
+        self.feed_box = tk.Text(frame, bg=self.bg, fg=self.fg, font=("Consolas", 9), bd=0, padx=10, pady=10)
+        self.feed_box.pack(fill=tk.BOTH, expand=True, padx=12, pady=10)
+
+    def _toggle_password_visibility(self):
+        show_char = "" if self.show_pwd_var.get() else "●"
+        self.e_ppass.config(show=show_char)
+
+    def _start_new_profile(self):
+        self.editor_mode = "new"
+        self.editing_index = None
+        self.lbl_editor_mode.config(text="Mode: [New Profile]", foreground=self.accent)
+        self.btn_save_profile.config(text="➕ Add & Save Profile")
+        self.e_pname.delete(0, tk.END)
+        self.e_pname.insert(0, "New Profile")
+        self.e_puser.delete(0, tk.END)
+        self.e_ppass.delete(0, tk.END)
+        if hasattr(self, "e_pgateway"):
+            self.e_pgateway.delete(0, tk.END)
+        self.show_pwd_var.set(False)
+        self._toggle_password_visibility()
+
+    def _start_edit_profile(self):
+        sel = self.profiles_lb.curselection()
+        if not sel:
+            messagebox.showinfo("Select Profile", "Please select a profile from the list to edit.")
+            return
+        idx = sel[0]
+        profiles = self.core.config.get("profiles", [])
+        if idx < len(profiles):
+            self.editor_mode = "edit"
+            self.editing_index = idx
+            p = profiles[idx]
+            self.lbl_editor_mode.config(text=f"Mode: [Editing Profile #{idx + 1}]", foreground="#f39c12")
+            self.btn_save_profile.config(text="💾 Update Profile")
+            self.e_pname.delete(0, tk.END)
+            self.e_pname.insert(0, p.get("name", ""))
+            self.e_puser.delete(0, tk.END)
+            self.e_puser.insert(0, p.get("username", ""))
+            self.e_ppass.delete(0, tk.END)
+            self.e_ppass.insert(0, p.get("password", ""))
+            if hasattr(self, "e_pgateway"):
+                self.e_pgateway.delete(0, tk.END)
+                self.e_pgateway.insert(0, p.get("gateway_match", ""))
+            self.show_pwd_var.set(False)
+            self._toggle_password_visibility()
+
+    def _on_status(self, st):
+        self.status_queue.put(st)
+
+    def _apply_status(self, st):
+        # Bug 49 fix: Explicit status color map replacing brittle 'ing' substring check
+        status_colors = {
+            "Connected": "#2ecc71",
+            "External Network (Online)": "#38bdf8",
+            "Connecting": "#f1c40f",
+            "Probing...": "#f1c40f",
+            "Shotgun Probing...": "#f1c40f",
+            "Logging In...": "#f1c40f",
+            "Authenticating...": "#f1c40f",
+            "Refreshing...": "#f1c40f",
+            "Untrusted Portal": "#e67e22",
+            "No Profile Configured": "#e67e22",
+            "Login Paused (Retries Exceeded)": "#e67e22",
+            "Credentials Rejected": "#e74c3c",
+            "Probe Timeout": "#e67e22",
+            "Disconnected": "#e74c3c",
+            "Error": "#e74c3c",
+        }
+        col = status_colors.get(st, "#f1c40f" if any(st.startswith(x) for x in ("Log", "Prob", "Conn", "Auth")) else "#e74c3c")
+        self.status_pill.config(text=f"● {st}", fg=col)
+        self._refresh_network_labels()
+        self._update_tray(st)
+
+    def _get_net_mode_display(self, mode_val: str) -> str:
+        mode_map = {
+            "auto": "Auto-Detect (Smart)",
+            "campus": "Campus Wi-Fi (GIT)",
+            "external": "External Network (Home / Mobile)"
+        }
+        return mode_map.get(mode_val, "Auto-Detect (Smart)")
+
+    def _on_net_mode_changed(self, event=None):
+        val = self.net_mode_var.get()
+        mode_map = {
+            "Auto-Detect (Smart)": "auto",
+            "Campus Wi-Fi (GIT)": "campus",
+            "External Network (Home / Mobile)": "external"
+        }
+        chosen = mode_map.get(val, "auto")
+        with _config_lock:
+            self.core.config["network_mode"] = chosen
+            save_settings(self.core.config)
+        self.core.log(f"[Network] Network mode switched to: {val}")
+        self._refresh_network_labels()
+        self._force_probe(reconnect_wlan=False)
+
+    def _cycle_net_mode_quick(self):
+        modes = ["auto", "campus", "external"]
+        cur = self.core.config.get("network_mode", "auto")
+        next_mode = modes[(modes.index(cur) + 1) % len(modes)] if cur in modes else "auto"
+        display_val = self._get_net_mode_display(next_mode)
+        self.net_mode_var.set(display_val)
+        self._on_net_mode_changed()
+
+    def _refresh_network_labels(self):
+        if hasattr(self, "lbl_ip"):
+            self.lbl_ip.config(text=self.core.local_ip)
+            self.lbl_gw.config(text=self.core.gateway_ip)
+        if hasattr(self, "lbl_mode_detected"):
+            eff = self.core.get_effective_network_mode()
+            cfg_m = self.core.config.get("network_mode", "auto")
+            if cfg_m == "auto":
+                text = f"● Active: {'Campus Portal' if eff == 'campus' else 'External / Home'}"
+                col = "#2ecc71" if eff == "campus" else "#38bdf8"
+            elif cfg_m == "campus":
+                text = "● Forced: Campus Portal"
+                col = "#2ecc71"
+            else:
+                text = "● Forced: External / Home"
+                col = "#38bdf8"
+            self.lbl_mode_detected.config(text=text, foreground=col)
+
+    def _on_log(self, text):
+        self.log_queue.put(text)
+
+    def _on_auto_profile_switch(self, new_idx: int):
+        """Schedule UI profile list and label refresh on Tkinter main thread when auto-profile switches (Bug 19)."""
+        self.tray_action_queue.put(self._refresh_profiles_view)
+
+    def _flush_log_queue(self):
+        try:
+            # Bug 6: Safely drain and execute tray callables on the Tkinter main thread
+            try:
+                while True:
+                    action_item = self.tray_action_queue.get_nowait()
+                    if callable(action_item):
+                        action_item()
+                    elif isinstance(action_item, tuple) and len(action_item) >= 1:
+                        fn, *args = action_item
+                        fn(*args)
+            except queue.Empty:
+                pass
+
+            try:
+                while True:
+                    self._apply_status(self.status_queue.get_nowait())
+            except queue.Empty:
+                pass
+
+            batch = []
+            try:
+                while len(batch) < 50:
+                    msg = self.log_queue.get_nowait()
+                    batch.append(msg)
+            except queue.Empty:
+                pass
+
+            if batch and hasattr(self, "feed_box"):
+                self.feed_box.insert(tk.END, "\n".join(batch) + "\n")
+                self.feed_box.see(tk.END)
+                if int(self.feed_box.index("end-1c").split(".")[0]) > 2000:
+                    self.feed_box.delete("1.0", "500.0")
+        except Exception as e:
+            print(f"[UI] Error updating log/status queue: {e}")
+        finally:
+            self.root.after(100, self._flush_log_queue)
+
+    def _tick_timer(self):
+        try:
+            # 0. Refresh network labels (IP, Gateway, Mode) once per second
+            self._refresh_network_labels()
+
+            # 1. Update session duration timer
+            if self.core.is_online() and self.core.session_start:
+                s = int(time.time() - self.core.session_start)
+                h, m, sec = s // 3600, (s % 3600) // 60, s % 60
+                self.lbl_timer.config(text=f"{h:02d}:{m:02d}:{sec:02d}")
+            else:
+                self.lbl_timer.config(text="00:00:00")
+
+            # 2. Update Live Bandwidth Metering (Feature 3)
+            if hasattr(self, "lbl_proxy_recv") and hasattr(self, "lbl_proxy_sent"):
+                proxy = self.core.proxy_server
+                with proxy.stats_lock:
+                    bs = proxy.bytes_sent
+                    br = proxy.bytes_recv
+                with proxy.clients_lock:
+                    active_c = proxy.active_clients
+
+                def _fmt_bytes(b: int) -> str:
+                    if b >= 1073741824:
+                        return f"{b / 1073741824:.2f} GB"
+                    if b >= 1048576:
+                        return f"{b / 1048576:.2f} MB"
+                    if b >= 1024:
+                        return f"{b / 1024:.1f} KB"
+                    return f"{b} B"
+
+                self.lbl_proxy_recv.config(text=_fmt_bytes(br))
+                self.lbl_proxy_sent.config(text=_fmt_bytes(bs))
+                if hasattr(self, "lbl_proxy_clients"):
+                    self.lbl_proxy_clients.config(text=str(active_c))
+
+            # 3. Live Network Monitor Telemetry (Speed, Ping, Packet Loss, Data Usage)
+            if hasattr(self, "lbl_live_down") and self.core.config.get("live_monitor_enabled", True):
+                try:
+                    now = time.time()
+                    dt = max(0.1, now - self.live_mon_prev_time)
+                    cur_in, cur_out = get_system_network_io()
+                    
+                    prev_in, prev_out = self.live_mon_prev_io
+                    if cur_in >= prev_in and cur_out >= prev_out:
+                        speed_in = (cur_in - prev_in) / dt
+                        speed_out = (cur_out - prev_out) / dt
+                    else:
+                        speed_in, speed_out = 0.0, 0.0
+
+                    self.live_mon_prev_io = (cur_in, cur_out)
+                    self.live_mon_prev_time = now
+
+                    def _fmt_rate(bps: float) -> str:
+                        if bps >= 1048576:
+                            return f"{bps / 1048576:.2f} MB/s"
+                        if bps >= 1024:
+                            return f"{bps / 1024:.1f} KB/s"
+                        return f"{int(bps)} B/s"
+
+                    def _fmt_total(b: int) -> str:
+                        if b >= 1073741824:
+                            return f"{b / 1073741824:.2f} GB"
+                        if b >= 1048576:
+                            return f"{b / 1048576:.2f} MB"
+                        if b >= 1024:
+                            return f"{b / 1024:.1f} KB"
+                        return f"{b} B"
+
+                    self.lbl_live_down.config(text=_fmt_rate(speed_in))
+                    self.lbl_live_up.config(text=_fmt_rate(speed_out))
+                    self.lbl_live_total_in.config(text=_fmt_total(cur_in))
+                    self.lbl_live_total_out.config(text=_fmt_total(cur_out))
+
+                    # Update Ping & Loss display
+                    if self.live_mon_ping_val is not None:
+                        p_col = "#2ecc71" if self.live_mon_ping_val < 50 else ("#f1c40f" if self.live_mon_ping_val < 150 else "#e74c3c")
+                        self.lbl_live_ping.config(text=f"{self.live_mon_ping_val} ms", fg=p_col)
+                    else:
+                        self.lbl_live_ping.config(text="-- ms", fg="#e74c3c")
+
+                    loss_col = "#2ecc71" if self.live_mon_loss_val == 0 else ("#f1c40f" if self.live_mon_loss_val < 20 else "#e74c3c")
+                    self.lbl_live_loss.config(text=f"{self.live_mon_loss_val}%", fg=loss_col)
+
+                    # Targets
+                    self.lbl_live_gw_target.config(text=self.core.gateway_ip)
+                    p_host = self.core.portal_host if (self.core.portal_host and self.core.portal_host != "-") else self.core.gateway_ip
+                    self.lbl_live_portal_target.config(text=f"{p_host}:{self.core.portal_port}")
+
+                except Exception:
+                    pass
+
+            # 3b. Update Daily Quota Telemetry & Multi-Account Rotation
+            try:
+                self.core.check_quota_and_rotate_if_needed()
+                q_info = self.core.get_active_profile_quota_status()
+                today_used_gb = q_info["used_gb"]
+                remaining_gb = q_info["remaining_gb"]
+                limit_gb = q_info["limit_gb"]
+                pct = min(100.0, q_info["percent"])
+                eff_mode = self.core.get_effective_network_mode()
+                is_portal = (q_info["source"] == "portal")
+                if eff_mode == "external":
+                    src_label = "External Network"
+                else:
+                    src_label = "Portal API" if is_portal else "Local Adapter"
+
+                col = "#2ecc71" if pct < 70 else ("#f1c40f" if pct < 90 else ("#e67e22" if pct < 98 else "#e74c3c"))
+
+                if hasattr(self, "lbl_dash_quota"):
+                    self.lbl_dash_quota.config(text=f"{today_used_gb:.2f} GB / {limit_gb:.1f} GB ({pct:.1f}%)", foreground=col)
+                if hasattr(self, "lbl_dash_remaining"):
+                    self.lbl_dash_remaining.config(text=f"{remaining_gb:.2f} GB Left [{src_label}]", foreground=col)
+
+                if hasattr(self, "lbl_live_quota_used"):
+                    self.lbl_live_quota_used.config(text=f"{today_used_gb:.2f} GB / {limit_gb:.1f} GB ({pct:.1f}%)", foreground=col)
+                if hasattr(self, "lbl_live_quota_remaining"):
+                    self.lbl_live_quota_remaining.config(text=f"{remaining_gb:.2f} GB Left", foreground=col)
+                if hasattr(self, "lbl_live_quota_source"):
+                    if eff_mode == "external":
+                        s_color = "#38bdf8"
+                        s_text = "External Network (Campus Auth Bypassed)"
+                    else:
+                        s_color = "#38bdf8" if is_portal else "#94a3b8"
+                        s_text = "Portal API (Authoritative)" if is_portal else "Local Adapter (Fallback)"
+                    self.lbl_live_quota_source.config(text=s_text, foreground=s_color)
+
+                if hasattr(self, "live_quota_pbar"):
+                    self.live_quota_pbar["value"] = pct
+                if hasattr(self, "lbl_live_rotation_status"):
+                    auto_rot = self.core.config.get("auto_rotate_on_quota", True)
+                    n_prof = len(self.core.config.get("profiles", []))
+                    if auto_rot and n_prof > 1:
+                        self.lbl_live_rotation_status.config(text=f"Active ({n_prof} Accounts)", foreground="#2ecc71")
+                    elif auto_rot:
+                        self.lbl_live_rotation_status.config(text="Single Account (Add more)", foreground="#f1c40f")
+                    else:
+                        self.lbl_live_rotation_status.config(text="Disabled", foreground="#e74c3c")
+            except Exception:
+                pass
+
+            # 4. Idle Auto-Logout Evaluation (Feature 6 & Bug 8/44 fix)
+            if self.core.status == "Connected" and self.core.config.get("idle_logout_enabled", False):
+                with self.core.state_lock:
+                    already_logging_out = self.core.user_signed_out or getattr(self.core, "_logout_in_progress", False)
+                if not already_logging_out:
+                    try:
+                        allowed_idle_mins = max(1, int(self.core.config.get("idle_logout_minutes", 30)))
+                    except (ValueError, TypeError):
+                        allowed_idle_mins = 30
+                    idle_sec = get_system_idle_seconds()
+                    
+                    # Check if proxy has active hotspot clients connected (Bug 44 fix)
+                    proxy_active = False
+                    if getattr(self.core, "proxy_server", None):
+                        with self.core.proxy_server.clients_lock:
+                            proxy_active = (self.core.proxy_server.active_clients > 0)
+
+                    if idle_sec >= (allowed_idle_mins * 60) and not proxy_active:
+                        with self.core.state_lock:
+                            self.core._logout_in_progress = True
+                        self.core.log(f"[Idle Guard] System idle for {int(idle_sec // 60)}m (threshold: {allowed_idle_mins}m). Triggering auto-logout...")
+                        def _do_idle_logout():
+                            try:
+                                self.core.logout()
+                            finally:
+                                with self.core.state_lock:
+                                    self.core._logout_in_progress = False
+                        threading.Thread(target=_do_idle_logout, daemon=True).start()
+        except Exception as e:
+            print(f"[Timer] Unhandled error in tick_timer: {e}")
+        finally:
+            self.root.after(1000, self._tick_timer)
+
+    def _reset_proxy_counters(self):
+        proxy = self.core.proxy_server
+        with proxy.stats_lock:
+            proxy.bytes_sent = 0
+            proxy.bytes_recv = 0
+        if hasattr(self, "lbl_proxy_recv"):
+            self.lbl_proxy_recv.config(text="0.00 MB")
+            self.lbl_proxy_sent.config(text="0.00 MB")
+        self.core.log("[Proxy] Bandwidth usage counters reset to 0.")
+
+    def _refresh_profiles_view(self):
+        self.profiles_lb.delete(0, tk.END)
+        profiles = self.core.config.get("profiles", [])
+        act = self.core.config.get("active_profile_index", 0)
+        today_str = datetime.date.today().isoformat()
+        limit_gb = float(self.core.config.get("daily_quota_limit_gb", 10.0))
+        for i, p in enumerate(profiles):
+            mark = "⭐ " if i == act else "   "
+            gw_tag = f" [{p['gateway_match']}]" if p.get("gateway_match") else ""
+            uname = p.get("username", "")
+            in_b, out_b = self.core.get_profile_daily_usage(uname, today_str)
+            tot_b = in_b + out_b
+            tracking_info = self.core.config.get("daily_usage_tracking", {}).get(today_str, {}).get(uname, {})
+            divisor = 1000000000.0 if tracking_info.get("server_synced") else (1024**3)
+            used_gb = tot_b / divisor
+            rem_gb = max(0.0, limit_gb - used_gb)
+            q_info = f" | {used_gb:.2f} GB (Left: {rem_gb:.2f} GB)" if uname else ""
+            self.profiles_lb.insert(tk.END, f"{mark}{p.get('name', 'Profile')} ({uname}){q_info}{gw_tag}")
+
+        active_prof = self.core.get_active_profile()
+        if active_prof:
+            self.lbl_profile.config(text=f"{active_prof.get('name', 'Profile')} ({active_prof.get('username')})")
+        else:
+            self.lbl_profile.config(text="None Configured")
+
+    def _on_profile_picked(self, event):
+        sel = self.profiles_lb.curselection()
+        if sel:
+            idx = sel[0]
+            profiles = self.core.config.get("profiles", [])
+            if idx < len(profiles):
+                p = profiles[idx]
+                self.editor_mode = "edit"
+                self.editing_index = idx
+                self.lbl_editor_mode.config(text=f"Mode: [Editing Profile #{idx + 1}]", foreground="#f39c12")
+                self.btn_save_profile.config(text="💾 Update Profile")
+                self.e_pname.delete(0, tk.END)
+                self.e_pname.insert(0, p.get("name", ""))
+                self.e_puser.delete(0, tk.END)
+                self.e_puser.insert(0, p.get("username", ""))
+                self.e_ppass.delete(0, tk.END)
+                self.e_ppass.insert(0, p.get("password", ""))
+                if hasattr(self, "e_pgateway"):
+                    self.e_pgateway.delete(0, tk.END)
+                    self.e_pgateway.insert(0, p.get("gateway_match", ""))
+                self.show_pwd_var.set(False)
+                self._toggle_password_visibility()
+
+    def _save_profile_fields(self):
+        name = self.e_pname.get().strip() or "Profile"
+        user = self.e_puser.get().strip()
+        pwd = self.e_ppass.get()  # Do NOT strip — passwords may have intentional spaces
+        gw_rule = self.e_pgateway.get().strip() if hasattr(self, "e_pgateway") else ""
+
+        if not user or not pwd:
+            messagebox.showwarning("Notice", "Username and password cannot be empty.")
+            return
+
+        with _config_lock:
+            profiles = self.core.config.get("profiles", [])
+            was_single_empty = (len(profiles) == 1 and not profiles[0].get("username"))
+
+            prof_entry = {"name": name, "username": user, "password": pwd}
+            if gw_rule:
+                prof_entry["gateway_match"] = gw_rule
+
+            if self.editor_mode == "edit" and self.editing_index is not None and self.editing_index < len(profiles):
+                saved_idx = self.editing_index
+                profiles[saved_idx] = prof_entry
+                msg = f"Profile '{name}' updated successfully."
+            else:
+                if was_single_empty:
+                    # User filled in the initial empty profile
+                    profiles[0] = prof_entry
+                    saved_idx = 0
+                    msg = f"Profile '{name}' configured successfully."
+                else:
+                    profiles.append(prof_entry)
+                    saved_idx = len(profiles) - 1
+                    msg = f"New profile '{name}' added successfully."
+
+            self.core.config["profiles"] = profiles
+
+            # Bug 10a: First real profile auto-activation and probe
+            active_idx = self.core.config.get("active_profile_index", 0)
+            should_activate_and_probe = False
+            if was_single_empty or len(profiles) == 1:
+                self.core.config["active_profile_index"] = 0
+                self.core.failed_login_attempts = 0
+                should_activate_and_probe = True
+            elif saved_idx == active_idx:
+                # Bug 10b: Editing active profile password resets retry counter
+                self.core.failed_login_attempts = 0
+                should_activate_and_probe = True
+
+            save_settings(self.core.config)
+
+        self._refresh_profiles_view()
+        messagebox.showinfo("Success", msg)
+        self._start_new_profile()
+
+        if should_activate_and_probe:
+            was_connected = (self.core.status == "Connected")
+            def _edit_probe_worker():
+                if was_connected:
+                    self.core.log("Logging out of previous session before authenticating updated active profile...")
+                    self.core.logout(disconnect_wifi=False, pause_auto_reconnect=False)
+                    with self.core.state_lock:
+                        self.core.keepalive_url = None
+                        self.core.current_magic = None
+                    with self.core.session_lock:
+                        try:
+                            self.core.session.cookies.clear()
+                        except Exception:
+                            pass
+                    time.sleep(2.5)
+                self._force_probe(reconnect_wlan=False)
+            threading.Thread(target=_edit_probe_worker, daemon=True).start()
+
+    def _rotate_profile_now(self):
+        profiles = self.core.config.get("profiles", [])
+        if len(profiles) <= 1:
+            messagebox.showinfo(
+                "Multi-Account Rotation",
+                "You only have 1 profile configured. Please add another profile (e.g. secondary student account or roommate account) in the Profiles tab to rotate between accounts."
+            )
+            return
+        success = self.core.rotate_to_next_profile(reason="manual_rotation")
+        if success:
+            self._refresh_profiles_view()
+            self._start_new_profile()
+
+    def _set_active_profile(self):
+        sel = self.profiles_lb.curselection()
+        if not sel:
+            return
+        new_idx = sel[0]
+        current_idx = self.core.config.get("active_profile_index", 0)
+        if new_idx == current_idx:
+            return
+        was_connected = (self.core.status == "Connected")
+        if was_connected:
+            if not messagebox.askyesno(
+                "Switch Profile",
+                "You are currently connected. Switching the active profile will log out of the current portal session and authenticate with the new credentials. Continue?"
+            ):
+                return
+        with _config_lock:
+            self.core.config["active_profile_index"] = new_idx
+            self.core.failed_login_attempts = 0
+            save_settings(self.core.config)
+        self._refresh_profiles_view()
+        self.core.log(f"Active profile switched to profile #{new_idx + 1}")
+        
+        # Bug 7 fix: If connected, explicitly terminate old portal session so the firewall demands new credentials
+        def _switch_worker():
+            if was_connected:
+                self.core.log("Logging out of previous session before authenticating new profile...")
+                self.core.logout(disconnect_wifi=False, pause_auto_reconnect=False)
+                with self.core.state_lock:
+                    self.core.keepalive_url = None
+                    self.core.current_magic = None
+                with self.core.session_lock:
+                    try:
+                        self.core.session.cookies.clear()
+                    except Exception:
+                        pass
+                # 2.5s grace period: allow OPNsense/pf backend to clear firewall session tables
+                time.sleep(2.5)
+            self._force_probe(reconnect_wlan=False)
+
+        threading.Thread(target=_switch_worker, daemon=True).start()
+
+    def _del_profile(self):
+        sel = self.profiles_lb.curselection()
+        if not sel:
+            return
+        del_idx = sel[0]
+        with _config_lock:
+            profiles = self.core.config.get("profiles", [])
+            if del_idx >= len(profiles):
+                return
+            target_prof = profiles[del_idx]
+            prof_name = target_prof.get("name", f"Profile #{del_idx+1}")
+            active_idx = self.core.config.get("active_profile_index", 0)
+            is_active = (del_idx == active_idx)
+
+        # Bug 10c: Warn explicitly if deleting the active profile
+        if is_active:
+            confirm_msg = (
+                f"Profile '{prof_name}' is currently ACTIVE.\n\n"
+                "Deleting the active profile will disconnect any active session. Are you sure you want to delete it?"
+            )
+        else:
+            confirm_msg = f"Are you sure you want to delete profile '{prof_name}'?"
+
+        if not messagebox.askyesno("Confirm Delete", confirm_msg):
+            return
+
+        with _config_lock:
+            del profiles[del_idx]
+            self.core.config["profiles"] = profiles
+
+            if not profiles:
+                self.core.config["active_profile_index"] = 0
+                self.core.set_status("No Profile Configured")
+            elif is_active:
+                # If deleted profile was active, set active to 0 (or next valid)
+                new_act = min(del_idx, len(profiles) - 1)
+                self.core.config["active_profile_index"] = new_act
+                self.core.failed_login_attempts = 0
+            elif del_idx < active_idx:
+                self.core.config["active_profile_index"] = active_idx - 1
+
+            save_settings(self.core.config)
+
+        self._refresh_profiles_view()
+        self._start_new_profile()
+
+        if is_active:
+            was_connected = (self.core.status == "Connected")
+            def _del_probe_worker():
+                if was_connected:
+                    self.core.log("Logging out of previous session before authenticating new profile...")
+                    self.core.logout(disconnect_wifi=False, pause_auto_reconnect=False)
+                    with self.core.state_lock:
+                        self.core.keepalive_url = None
+                        self.core.current_magic = None
+                    with self.core.session_lock:
+                        try:
+                            self.core.session.cookies.clear()
+                        except Exception:
+                            pass
+                    time.sleep(2.5)
+                if profiles:
+                    self._force_probe(reconnect_wlan=False)
+                else:
+                    self.core.interrupt_cycle()
+
+            if profiles:
+                messagebox.showinfo("Profile Deleted", f"Active profile was deleted. Switched to '{profiles[self.core.config['active_profile_index']].get('name', 'Profile')}'.")
+                threading.Thread(target=_del_probe_worker, daemon=True).start()
+            else:
+                messagebox.showinfo("Profile Deleted", "Active profile was deleted. No profiles remain configured.")
+                threading.Thread(target=_del_probe_worker, daemon=True).start()
+
+    def _force_probe(self, reconnect_wlan: bool = True):
+        self.core.failed_login_attempts = 0
+        self.core.error_backoff_seconds = 30.0
+        with self.core.state_lock:
+            self.core.keepalive_url = None
+            self.core.portal_session_id = None
+            self.core.portal_usage_data = None
+            self.core.portal_usage_source = "local"
+            self.core.user_signed_out = False
+            wlan_target = self.core.last_connected_profile or self.core.last_connected_ssid
+            if not reconnect_wlan:
+                wlan_target = None
+
+        if reconnect_wlan and wlan_target:
+            try:
+                subprocess.Popen(["netsh", "wlan", "connect", f"name={wlan_target}"], creationflags=CREATE_NO_WINDOW)
+                self.core.log(f"Reconnecting to Wi-Fi: {wlan_target}")
+            except Exception as e:
+                self.core.log(f"WLAN reconnect error: {e}")
+            self.core.last_connected_ssid = None
+            self.core.last_connected_profile = None
+
+        self.core.interrupt_cycle()
+
+    def _save_toggles(self):
+        with _config_lock:
+            self.core.config["sound_alerts"] = self.snd_var.get()
+            self.core.config["desktop_notifications"] = self.ntf_var.get()
+            if hasattr(self, "autoprof_var"):
+                self.core.config["auto_profile_switching"] = self.autoprof_var.get()
+            if hasattr(self, "adapt_ka_var"):
+                self.core.config["adaptive_keepalive"] = self.adapt_ka_var.get()
+            if hasattr(self, "idle_logout_var"):
+                self.core.config["idle_logout_enabled"] = self.idle_logout_var.get()
+            if hasattr(self, "e_idle_mins"):
+                try:
+                    self.core.config["idle_logout_minutes"] = max(1, int(self.e_idle_mins.get().strip()))
+                except ValueError:
+                    pass
+            if hasattr(self, "auto_rotate_quota_var"):
+                self.core.config["auto_rotate_on_quota"] = self.auto_rotate_quota_var.get()
+            if hasattr(self, "auto_rotate_disc_var"):
+                self.core.config["auto_rotate_on_disconnect"] = self.auto_rotate_disc_var.get()
+            if hasattr(self, "e_quota_gb"):
+                try:
+                    self.core.config["daily_quota_limit_gb"] = max(0.1, float(self.e_quota_gb.get().strip()))
+                except ValueError:
+                    pass
+            if hasattr(self, "doh_var"):
+                self.core.config["doh_fallback_enabled"] = self.doh_var.get()
+            if hasattr(self, "portal_usage_sync_var"):
+                self.core.config["portal_usage_sync"] = self.portal_usage_sync_var.get()
+            if hasattr(self, "live_mon_var"):
+                self.core.config["live_monitor_enabled"] = self.live_mon_var.get()
+            save_settings(self.core.config)
+
+    def _sync_portal_usage_now(self):
+        """Manual command to query the real-time daily quota directly from the captive portal API."""
+        def _bg():
+            eff = self.core.get_effective_network_mode()
+            if eff == "external":
+                self.core.log("[Portal] Direct portal quota sync unavailable in External Network mode (bypassed).")
+                return
+            self.core.log("[Portal] Querying real-time quota & data remaining from captive portal API...")
+            res = self.core.query_portal_usage(force=True)
+            if res:
+                self.core.log(f"[Portal] Quota synced: {res['used_gb']:.3f} GB used, {res['remaining_gb']:.3f} GB left of {res['limit_gb']:.1f} GB ({res['percent']:.1f}%).")
+                self.root.after(0, self._refresh_profiles_view)
+            else:
+                self.core.log("[Portal] Portal usage endpoint not available or not connected to campus portal. Using local tracking fallback.")
+        threading.Thread(target=_bg, daemon=True).start()
+
+    def _toggle_live_monitor_tab(self):
+        enabled = self.live_mon_var.get()
+        with _config_lock:
+            self.core.config["live_monitor_enabled"] = enabled
+            save_settings(self.core.config)
+
+        # Tab index 2 is between Profiles and Hotspot Sharing
+        if enabled:
+            if str(self.tab_live) not in self.notebook.tabs():
+                self.notebook.insert(2, self.tab_live, text="📊 Monitor")
+                self.core.log("[UI] Live Network Monitor tab enabled.")
+            if hasattr(self, "lbl_live_ping"):
+                ping_txt = f"{self.live_mon_ping_val} ms" if self.live_mon_ping_val is not None else "-- ms"
+                self.lbl_live_ping.config(text=ping_txt)
+            if hasattr(self, "lbl_live_loss"):
+                self.lbl_live_loss.config(text=f"{self.live_mon_loss_val}%")
+            if hasattr(self, "live_mon_wake_event"):
+                self.live_mon_wake_event.set()
+        else:
+            if str(self.tab_live) in self.notebook.tabs():
+                self.notebook.forget(self.tab_live)
+                self.core.log("[UI] Live Network Monitor tab hidden.")
+
+    def _toggle_autostart(self):
+        enable = self.autostart_var.get()
+        success = set_auto_start_registered(enable)
+        if success:
+            with _config_lock:
+                self.core.config["auto_start_enabled"] = enable
+                save_settings(self.core.config)
+            msg = "GITwifi will now launch automatically on Windows boot (minimized to tray)." if enable else "Automatic Windows startup disabled."
+            self.core.log(f"[Autostart] {msg}")
+        else:
+            messagebox.showwarning("Autostart Warning", "Could not update Windows registry Run key.")
+            self.autostart_var.set(is_auto_start_registered())
+
+    def _toggle_proxy(self):
+        enable = self.proxy_var.get()
+        if enable:
+            port_text = self.e_proxy_port.get().strip()
+            try:
+                p = int(port_text)
+                if not (1 <= p <= 65535):
+                    raise ValueError("Port must be between 1 and 65535.")
+            except ValueError as ve:
+                messagebox.showerror("Invalid Proxy Port", f"Invalid proxy port '{port_text}'. Please enter a number between 1 and 65535.")
+                self.proxy_var.set(False)
+                return
+
+            port_changed = (self.core.proxy_server.port != p)
+            self.core.proxy_server.port = p
+            if port_changed and self.core.proxy_server.running:
+                self.core.proxy_server.stop()
+            started = self.core.proxy_server.start()
+
+            if started and self.core.proxy_server.running:
+                with _config_lock:
+                    self.core.config["proxy_port"] = p
+                    self.core.config["proxy_enabled"] = True
+                    save_settings(self.core.config)
+                self.lbl_proxy_status.config(text=f"Proxy is currently: Running on port {self.core.proxy_server.port}")
+            else:
+                with _config_lock:
+                    self.core.config["proxy_enabled"] = False
+                    save_settings(self.core.config)
+                self.proxy_var.set(False)
+                self.lbl_proxy_status.config(text="Proxy is currently: Failed to start")
+        else:
+            with _config_lock:
+                self.core.config["proxy_enabled"] = False
+                save_settings(self.core.config)
+            self.core.proxy_server.stop()
+            self.lbl_proxy_status.config(text="Proxy is currently: Stopped")
+
+    def _toggle_proxy_sniffing(self):
+        val = self.sniff_var.get()
+        self.core.proxy_server.sniff_headers = val
+        with _config_lock:
+            self.core.config["proxy_sniff_headers"] = val
+            save_settings(self.core.config)
+        state_str = "ENABLED" if val else "DISABLED"
+        self.core.log(f"[Proxy] HTTP traffic metadata sniffing {state_str}. Host, UA, and requested URIs will {'' if val else 'not '}be logged.")
+
+    def _on_ua_pick(self, event=None):
+        self._refresh_ua_preview()
+
+    def _refresh_ua_preview(self):
+        mode = self.ua_selection.get()
+        if mode == "Custom":
+            # Load stored custom UA or fall back to Chrome preset as starting point
+            val = self.core.config.get("custom_user_agent") or SPOOF_USER_AGENTS["Windows Chrome"]
+            # Allow editing only for Custom mode (Item 30)
+            self.ua_preview.config(state=tk.NORMAL)
+        else:
+            val = SPOOF_USER_AGENTS.get(mode, SPOOF_USER_AGENTS["Windows Chrome"])
+            # Preset modes: show the value but prevent editing
+            self.ua_preview.config(state=tk.NORMAL)
+        self.ua_preview.delete("1.0", tk.END)
+        self.ua_preview.insert(tk.END, val)
+        if mode != "Custom":
+            self.ua_preview.config(state=tk.DISABLED)
+
+    def _commit_stealth(self):
+        mode = self.ua_selection.get()
+        with _config_lock:
+            self.core.config["user_agent_mode"] = mode
+            if mode == "Custom":
+                # Ensure text box is readable when saving (it may be disabled if mode was just switched)
+                self.ua_preview.config(state=tk.NORMAL)
+                # Bug 51 fix: Strip all internal \r and \n to prevent requests.exceptions.InvalidHeader
+                raw_ua = self.ua_preview.get("1.0", tk.END)
+                clean_ua = " ".join(raw_ua.split())
+                self.core.config["custom_user_agent"] = clean_ua
+            save_settings(self.core.config)
+            self.core.error_backoff_seconds = 30.0
+        messagebox.showinfo("Stealth", "User-Agent spoofing settings saved.")
+
+    def _execute_diag(self):
+        if hasattr(self, "btn_diag"):
+            self.btn_diag.config(state=tk.DISABLED)
+        self.diag_box.config(state=tk.NORMAL)
+        self.diag_box.delete("1.0", tk.END)
+        self.diag_box.insert(tk.END, "[*] Running comprehensive network & DoH telemetry check...\n\n")
+
+        def _work():
+            lines = []
+            gw = self.core.gateway_ip if (self.core.gateway_ip and self.core.gateway_ip != "-") else get_default_gateway() or "127.0.0.1"
+            portal_port = self.core.portal_port or AppConstants.DEFAULT_PORTAL_PORT
+            local_ip = self.core.local_ip
+
+            lines.append("=== 1. WI-FI HARDWARE & LINK TELEMETRY ===")
+            try:
+                # N3 Note: netsh wlan output labels (SSID, Signal, etc.) are English-only by design.
+                # Native multi-language support would require direct Windows WLAN API (wlanapi.dll via ctypes).
+                # Use errors='replace' to avoid locale/encoding failures on non-ASCII SSIDs
+                result = subprocess.run(
+                    ["netsh", "wlan", "show", "interfaces"],
+                    capture_output=True, text=True, errors="replace", creationflags=CREATE_NO_WINDOW
+                )
+                output = result.stdout
+                
+                ssid, signal, rx_rate, tx_rate, channel = "Unknown", "Unknown", "Unknown", "Unknown", "Unknown"
+                for line in output.splitlines():
+                    line_str = line.strip()
+                    if ":" not in line_str:
+                        continue
+                    k, v = [x.strip() for x in line_str.split(":", 1)]
+                    k_lower = k.lower()
+                    if "bssid" not in k_lower and "ssid" in k_lower:
+                        ssid = v
+                    elif "signal" in k_lower:
+                        signal = v
+                    elif "receive rate" in k_lower or "rx rate" in k_lower:
+                        rx_rate = v
+                    elif "transmit rate" in k_lower or "tx rate" in k_lower:
+                        tx_rate = v
+                    elif "channel" in k_lower:
+                        channel = v
+
+                if ssid == "Unknown":
+                    lines.append("• Wi-Fi Telemetry:        No active Wi-Fi interface detected in netsh.")
+                else:
+                    lines.append(f"• Active SSID:            {ssid}")
+                    lines.append(f"• Signal Strength:        {signal}")
+                    lines.append(f"• Link Speed (Rx / Tx):   {rx_rate} Mbps / {tx_rate} Mbps")
+                    lines.append(f"• Wi-Fi Channel:          {channel}")
+            except Exception as e:
+                lines.append(f"• Wi-Fi Telemetry:        FAILED ({e})")
+
+            target_portal_host = self.core.portal_host if (self.core.portal_host and self.core.portal_host != "-") else gw
+            portal_label = "OPNsense Portal" if (self.core.portal_type == "opnsense" or portal_port == 8000) else "Captive Portal"
+
+            lines.append("\n=== 2. GATEWAY & PORTAL DAEMON HEALTH ===")
+            lines.append(f"• Local IP:               {local_ip}")
+            lines.append(f"• Default Gateway:        {gw}")
+            lines.append(f"• {portal_label} Host:     {target_portal_host}:{portal_port}")
+
+            t0 = time.time()
+            s_portal = None
+            try:
+                s_portal = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                s_portal.settimeout(2.0)
+                s_portal.connect((target_portal_host, portal_port))
+                ms = int((time.time() - t0) * 1000)
+                lines.append(f"• Portal Port {portal_port}:      OPEN ({ms}ms)")
+            except Exception as e:
+                lines.append(f"• Portal Port {portal_port}:      BLOCKED/UNREACHABLE ({e})")
+            finally:
+                if s_portal:
+                    try:
+                        s_portal.close()
+                    except Exception:
+                        pass
+
+            lines.append("\n=== 3. ENCRYPTED DNS (DoH) & ROUTING ===")
+            
+            t0 = time.time()
+            try:
+                dns_query = (
+                    b"\xaa\xbb"
+                    b"\x01\x00"
+                    b"\x00\x01"
+                    b"\x00\x00\x00\x00\x00\x00"
+                    b"\x06google\x03com\x00"
+                    b"\x00\x01"
+                    b"\x00\x01"
+                )
+                s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                s.settimeout(2.0)
+                try:
+                    s.sendto(dns_query, (gw, 53))
+                    s.recv(512)
+                finally:
+                    s.close()
+                ms = int((time.time() - t0) * 1000)
+                lines.append(f"• Gateway UDP DNS (53):   PASS ({ms}ms)")
+            except Exception:
+                lines.append("• Gateway UDP DNS (53):   BLOCKED")
+
+            t0 = time.time()
+            # Bug 42 fix: Use configured DoH server endpoint
+            doh_endpoint = self.core.config.get("doh_endpoint") or self.core.config.get("doh_server", "https://1.1.1.1/dns-query")
+            doh_label = "Cloudflare DoH (1.1.1.1)" if "1.1.1.1" in doh_endpoint else f"Configured DoH ({doh_endpoint.split('//')[-1].split('/')[0]})"
+            try:
+                req_url = f"{doh_endpoint}?name=google.com" if "?" not in doh_endpoint else f"{doh_endpoint}&name=google.com"
+                r = requests.get(req_url, 
+                                 headers={"accept": "application/dns-json"}, 
+                                 timeout=3, verify=False)
+                ms = int((time.time() - t0) * 1000)
+                # Validate response body actually contains DNS Answer to eliminate captive portal false positives
+                if r.status_code == 200:
+                    try:
+                        doh_data = r.json()
+                        if "Answer" in doh_data or doh_data.get("Status") == 0:
+                            lines.append(f"• {doh_label}: PASS ({ms}ms)")
+                        else:
+                            lines.append(f"• {doh_label}: GATED (Non-DNS 200 Interception)")
+                    except Exception:
+                        lines.append(f"• {doh_label}: GATED (Invalid DNS JSON / Portal Intercept)")
+                else:
+                    lines.append(f"• {doh_label}: GATED (HTTP {r.status_code})")
+            except Exception:
+                lines.append(f"• {doh_label}: BLOCKED (Portal Interception Active)")
+
+            lines.append("\n=== 4. MULTI-HOP LATENCY CHECK ===")
+            targets = [
+                ("Gateway (HTTP/80)", gw, 80),
+                ("Portal Host", target_portal_host, portal_port),
+                ("Cloudflare (HTTPS)", "1.1.1.1", 443),
+                ("Google (HTTPS)", "8.8.8.8", 443)
+            ]
+            for target_name, target_ip, target_p in targets:
+                t0 = time.time()
+                s_hop = None
+                try:
+                    s_hop = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    s_hop.settimeout(2.0)
+                    s_hop.connect((target_ip, target_p))
+                    ms = int((time.time() - t0) * 1000)
+                    lines.append(f"• Latency to {target_name:20s} ({target_ip}:{target_p}): {ms}ms")
+                except Exception:
+                    lines.append(f"• Latency to {target_name:20s} ({target_ip}:{target_p}): TIMEOUT")
+                finally:
+                    if s_hop:
+                        try:
+                            s_hop.close()
+                        except Exception:
+                            pass
+
+            lines.append(f"\n• Current Session Status: {self.core.status}")
+
+            def _done():
+                self.diag_box.insert(tk.END, "\n".join(lines) + "\n\n[✓] Diagnostic check completed.\n")
+                self.diag_box.config(state=tk.NORMAL)
+                self.diag_box.see(tk.END)
+                if hasattr(self, "btn_diag"):
+                    self.btn_diag.config(state=tk.NORMAL)
+
+            self._tray_dispatch(_done)
+
+        threading.Thread(target=_work, daemon=True).start()
+
+    # --- SYSTEM TRAY ---
+    def _tray_dispatch(self, fn: Callable, *args) -> None:
+        """Safely schedule a callable on the Tkinter main thread via tray_action_queue (Bug 6)."""
+        if args:
+            self.tray_action_queue.put((fn, *args))
+        else:
+            self.tray_action_queue.put(fn)
+
+    def _create_icon(self, color="red"):
+        if not hasattr(self, "_tray_icon_cache"):
+            self._tray_icon_cache = {}
+        if color in self._tray_icon_cache:
+            return self._tray_icon_cache[color]
+
+        master_sz = 512
+        img = Image.new("RGBA", (master_sz, master_sz), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(img)
+        cx, cy = master_sz // 2, master_sz // 2
+        r = master_sz // 2 - 16
+
+        # Base background circle - Deep GIT Navy
+        draw.ellipse([cx - r, cy - r, cx + r, cy + r], fill="#082352")
+        draw.ellipse([cx - r + 8, cy - r + 8, cx + r - 8, cy + r - 8], outline=(56, 189, 248, 180), width=6)
+
+        # High definition Wi-Fi arcs
+        arc_configs = [
+            (170, 26, "#38bdf8"),
+            (120, 22, "#2563eb"),
+            (70, 18, "#1d4ed8")
+        ]
+        for rad, w, col in arc_configs:
+            x0, y0 = cx - rad, cy - rad + 40
+            x1, y1 = cx + rad, cy + rad + 40
+            draw.arc([x0, y0, x1, y1], start=215, end=325, fill=col, width=w)
+
+        # Center Wi-Fi dot
+        dot_r = 26
+        dot_y = cy + 100
+        draw.ellipse([cx - dot_r, dot_y - dot_r, cx + dot_r, dot_y + dot_r], fill="#38bdf8")
+        draw.ellipse([cx - 12, dot_y - 12, cx + 12, dot_y + 12], fill="#ffffff")
+
+        # Status badge at bottom-right corner
+        badge_colors = {
+            "green": "#10b981",
+            "cyan": "#38bdf8",
+            "orange": "#f59e0b",
+            "red": "#ef4444"
+        }
+        b_col = badge_colors.get(color, "#ef4444")
+        bx, by = master_sz - 95, master_sz - 95
+        br = 70
+        # Dark outline around badge to separate cleanly from background
+        draw.ellipse([bx - br - 12, by - br - 12, bx + br + 12, by + br + 12], fill="#051329")
+        draw.ellipse([bx - br, by - br, bx + br, by + br], fill=b_col)
+        draw.ellipse([bx - br + 22, by - br + 22, bx + br - 22, by + br - 22], fill="#ffffff")
+
+        # Downsample with Lanczos to crisp 64x64 for Windows System Tray
+        tray_img = img.resize((64, 64), Image.Resampling.LANCZOS)
+        self._tray_icon_cache[color] = tray_img
+        return tray_img
+
+    def _setup_tray_icon(self):
+        if not HAS_PYSTRAY:
+            self.tray = None
+            return
+        try:
+            menu = pystray.Menu(
+                item("Open GITwifi", lambda icon, it: self._tray_dispatch(self.restore_from_tray), default=True),
+                item("Force Re-Probe", lambda icon, it: self._tray_dispatch(self._force_probe)),
+                item("Toggle Network Mode", lambda icon, it: self._tray_dispatch(self._cycle_net_mode_quick)),
+                item("Rotate Account (Next)", lambda icon, it: self._tray_dispatch(self._rotate_profile_now)),
+                item("Logout", lambda icon, it: self._tray_dispatch(
+                    lambda: threading.Thread(target=self.core.logout, daemon=True).start()
+                )),
+                pystray.Menu.SEPARATOR,
+                item("Quit", lambda icon, it: self._tray_dispatch(self.quit_app))
+            )
+            self.tray = pystray.Icon("GITwifi", self._create_icon("red"), "GITwifi Engine", menu)
+            threading.Thread(target=self.tray.run, daemon=True).start()
+        except Exception as e:
+            self.tray = None
+            print(f"[Tray] System tray initialization warning: {e}")
+
+    def _update_tray(self, st):
+        c = "green" if st == "Connected" else ("cyan" if "external" in st.lower() else ("orange" if "ing" in st.lower() else "red"))
+        if HAS_PYSTRAY and getattr(self, "tray", None):
+            try:
+                self.tray.icon = self._create_icon(c)
+                self.tray.title = f"GITwifi: {st}"
+
+                if self.core.config.get("desktop_notifications", True):
+                    online_states = ("Connected", "External Network (Online)")
+                    if st in online_states and self.last_notified_state not in online_states:
+                        self.last_notified_state = st
+                        msg = "Connected to Campus Network." if st == "Connected" else "Online on External Network."
+                        self.tray.notify(msg, "GITwifi")
+                    elif st not in online_states and self.last_notified_state in online_states:
+                        # Bug 15: Only send "Disconnected" notification for terminal failure states
+                        terminal_failure_states = {
+                            "Disconnected", "Logged Out", "Login Rejected",
+                            "Error", "Untrusted Portal", "Login Paused (Retries Exceeded)"
+                        }
+                        if st in terminal_failure_states:
+                            self.last_notified_state = st
+                            notify_msg = "Connection lost." if st == "Disconnected" else f"Disconnected: {st}"
+                            self.tray.notify(notify_msg, "GITwifi")
+            except Exception:
+                pass
+
+    def minimize_to_tray(self):
+        if HAS_PYSTRAY and getattr(self, "tray", None):
+            self.root.withdraw()
+        else:
+            self.root.iconify()
+
+    def restore_from_tray(self):
+        def _restore():
+            self.root.deiconify()
+            self.root.lift()
+            self.root.focus_force()
+        self._tray_dispatch(_restore)
+
+    def quit_app(self):
+        self.live_mon_worker_running = False
+        if hasattr(self, "live_mon_wake_event"):
+            self.live_mon_wake_event.set()
+        self.core.stop()
+        if HAS_PYSTRAY and getattr(self, "tray", None):
+            try:
+                self.tray.stop()
+            except Exception:
+                pass
+        self._tray_dispatch(self.root.destroy)
+
+_SINGLE_INSTANCE_MUTEX = None
+
+def _acquire_single_instance_lock() -> bool:
+    """Ensure only one instance of GITwifi runs at a time using a named Win32 mutex."""
+    global _SINGLE_INSTANCE_MUTEX
+    try:
+        import ctypes
+        from ctypes import wintypes
+        ERROR_ALREADY_EXISTS = 183
+        mutex_name = "Local\\GITwifi_Suite_SingleInstanceMutex_Default"
+        _SINGLE_INSTANCE_MUTEX = ctypes.windll.kernel32.CreateMutexW(None, wintypes.BOOL(False), mutex_name)
+        last_err = ctypes.windll.kernel32.GetLastError()
+        if last_err == ERROR_ALREADY_EXISTS:
+            return False
+        return True
+    except Exception:
+        return True
+
+if __name__ == "__main__":
+    if not _acquire_single_instance_lock():
+        # Another instance is already running; exit gracefully without corrupting state
+        try:
+            # Try to bring the existing window to front if found
+            import ctypes
+            hwnd = ctypes.windll.user32.FindWindowW(None, "GITwifi - Clean Windows Suite")
+            if hwnd:
+                ctypes.windll.user32.ShowWindow(hwnd, 9) # SW_RESTORE
+                ctypes.windll.user32.SetForegroundWindow(hwnd)
+        except Exception:
+            pass
+        sys.exit(0)
+
+    try:
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("GITwifi.Suite.App")
+    except Exception:
+        pass
+
+    root = tk.Tk()
+    app = GitWifiApp(root)
+    root.mainloop()

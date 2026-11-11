@@ -1,0 +1,43 @@
+{
+  "profiles": [
+    {
+      "name": "Default",
+      "username": "your_username",
+      "password": ""
+    }
+  ],
+  "active_profile_index": 0,
+  "user_agent_mode": "iPhone 15 (iOS Spoof)",
+  "custom_user_agent": "",
+  "sound_alerts": true,
+  "desktop_notifications": true,
+  "keepalive_interval": 120,
+  "auto_reconnect": true,
+  "proxy_enabled": false,
+  "proxy_port": 8888,
+  "last_gateway": "10.17.0.1",
+  "trusted_portal_hosts": [
+    "172.15.1.2",
+    "www.opn.gitjaipur.com",
+    "opn.gitjaipur.com"
+  ],
+  "portal_host": "10.17.0.1",
+  "portal_port": "1000",
+  "portal_scheme": "http",
+  "last_magic": "",
+  "adaptive_keepalive": true,
+  "auto_profile_switching": true,
+  "auto_start_enabled": false,
+  "idle_logout_enabled": false,
+  "idle_logout_minutes": 30,
+  "doh_fallback_enabled": true,
+  "doh_endpoint": "https://1.1.1.1/dns-query",
+  "proxy_sniff_headers": false,
+  "live_monitor_enabled": true,
+  "daily_quota_limit_gb": 10.0,
+  "auto_rotate_on_quota": true,
+  "auto_rotate_on_disconnect": false,
+  "portal_usage_sync": true,
+  "network_mode": "auto",
+  "daily_usage_tracking": {}
+}

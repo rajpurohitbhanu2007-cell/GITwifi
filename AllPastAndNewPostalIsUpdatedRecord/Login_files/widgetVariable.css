@@ -1,0 +1,11 @@
+:root {
+  /*common*/
+  --s-color-html-widget-text: var(--s-color-theme-neutral-text-50);
+  --s-color-html-bg: transparent;
+  --s-color-origin-button-bg: transparent;
+  /*progressbar*/
+  --s-color-progressbar-value-bg: var(--s-color-theme-main-mid);
+  /*combobox*/
+  --s-color-combobox-switch-border: var(--s-color-theme-neutral-bg-30);
+  --s-color-combobox-list-wrap-border: var(--s-color-theme-neutral-bg-50);
+}

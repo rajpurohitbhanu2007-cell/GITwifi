@@ -1,0 +1,31 @@
+:root {
+   /*theme main color*/
+   --s-color-theme-main-deep: #0A5A5A;
+   --s-color-theme-main-mid: #00A870;
+   --s-color-theme-main-mid-hover: #05C178;
+   --s-color-theme-main-mid-disabled: #99DCC6;
+   --s-color-theme-main-link: #0069CB;
+   --s-color-theme-main-link-hover: #0D89FD;
+ 
+   /*theme status color*/
+   --s-color-theme-error: #EE385C;
+   --s-color-theme-error-hover: #FF5B7B;
+   --s-color-theme-warn: #ffcb00;
+
+ 
+   /*theme neutral text color*/
+   --s-color-theme-neutral-text-10: #FFFFFF;
+   --s-color-theme-neutral-text-20: #CCCCCC;/*不可点、置灰*/
+   --s-color-theme-neutral-text-30: #999999;/*三级*/
+   --s-color-theme-neutral-text-40: #636363;/*二级*/
+   --s-color-theme-neutral-text-50: #2B2B2B;/*标题/正文*/
+ 
+   /*theme neutral background color*/
+   --s-color-theme-neutral-bg-10: #FFFFFF;/*页面背景*/
+   --s-color-theme-neutral-bg-20: #F7F7F7;/*侧边栏页面背景、表格表头色*/
+   --s-color-theme-neutral-bg-30: #F4F4F4;/*次按钮底色、输入选择框底色、Tab底色*/
+   --s-color-theme-neutral-bg-40: #FBFBFB; /*表格列表hover色*/
+   --s-color-theme-neutral-bg-50: #ECECEC;/*表格border 次按钮底色hover、分割线、进度条底灰、骨架屏色、选择输入框边框（禁用填充）*/
+   --s-color-theme-neutral-bg-60: #CCCCCC;/*滚动条、开关底色常规*/
+   --s-color-theme-neutral-bg-70: #BEBEBE;/*开关底色悬浮*/
+}

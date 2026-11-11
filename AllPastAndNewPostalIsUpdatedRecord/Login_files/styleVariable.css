@@ -1,0 +1,505 @@
+:root {
+  /*base*/
+  --s-color-html-text: var(--s-color-theme-neutral-text-50);
+  --s-color-body-bg: var(--s-color-theme-neutral-bg-10);
+  --s-color-body-text: var(--s-color-theme-neutral-text-50);
+  /*main内容区*/
+  --s-color-main-bg: var(--s-color-theme-neutral-bg-10);
+  /*底部support*/
+  --s-color-bot-text: var(--s-color-theme-neutral-text-10);
+  --s-color-bot-bg: rgba(0, 0, 0, 0.5);
+  --s-color-bot-support-text: var(--s-color-theme-neutral-text-10);
+
+  /*top menu */
+  --s-color-top-menu-bg: linear-gradient(to right, #046F65, #006259);
+  --s-color-top-menu-item-text: var(--s-color-theme-neutral-text-10);
+  --s-color-top-menu-item-text-hover: var(--s-color-theme-main-mid-hover);
+  --s-color-top-menu-item-text-selected: var(--s-color-theme-main-mid);
+  --s-color-top-menu-item-bg-selected: var(--s-color-theme-neutral-bg-10);
+  --s-color-top-menu-item-selected-underline: var(--s-color-theme-neutral-bg-10);
+  --s-color-top-menu-operation-text: var(--s-color-theme-neutral-text-10);
+  --s-color-top-menu-operation-text-hover: var(--s-color-theme-main-mid-hover);
+  --s-color-top-menu-operation-text-active: var(--s-color-theme-main-mid);
+
+  /*side menu*/
+  --s-color-side-menu-bg: var(--s-color-theme-neutral-bg-20);
+  --s-color-side-menu-primary-item-text: var(--s-color-theme-neutral-text-40);
+  --s-color-side-menu-primary-item-text-hover: var(--s-color-theme-neutral-text-50);
+  --s-color-side-menu-primary-item-text-selected: var(--s-color-theme-neutral-text-50);
+  --s-color-side-menu-primary-item-bg: var(--s-color-theme-neutral-bg-20);
+  --s-color-side-menu-primary-item-bg-hover: var(--s-color-theme-neutral-bg-50);
+  --s-color-side-menu-primary-item-bg-selected: var(--s-color-theme-neutral-bg-50);
+  --s-color-side-menu-primary-item-border: transparent;
+  --s-color-side-menu-secondary-bg: var(--s-color-theme-neutral-bg-20);
+  --s-color-side-menu-secondary-item-dot: transparent;
+  --s-color-side-menu-secondary-item-text-selected: var(--s-color-theme-main-mid);
+  --s-color-side-menu-secondary-item-bg-hover: var(--s-color-theme-neutral-bg-50);
+  --s-color-side-menu-secondary-item-bg-selected: var(--s-color-theme-neutral-bg-10);
+  
+  /* tab change button  */
+  --s-color-tab-ctn-button-border: var(--s-color-theme-neutral-bg-50);
+  --s-color-tab-ctn-button-border-hover: var(--s-color-theme-main-mid-hover);
+  --s-color-tab-ctn-button-border-selected: var(--s-color-theme-main-mid);
+  --s-color-tab-ctn-button-text: var(--s-color-theme-neutral-text-50);
+  --s-color-tab-ctn-button-text-hover: var(--s-color-theme-main-mid-hover);
+  --s-color-tab-ctn-button-text-selected: var(--s-color-theme-main-mid);
+
+
+
+  /*echart: cpuMonitor | memoryMonitor | system_info-> sys_summary | system_info-> sys_summary_stack   */
+  --s-color-echart-grid-bg: var(--s-color-theme-neutral-bg-10);
+  --s-color-echart-grid-border: var(--s-color-theme-neutral-bg-50);
+  --s-color-echart-axis-text: var(--s-color-theme-neutral-text-50);
+  --s-color-echart-axis-line-text: var(--s-color-theme-neutral-bg-50);
+  --s-color-echart-axis-line-deep-text: var(--s-color-theme-neutral-text-40);
+  --s-color-echart-series-10: var(--s-color-theme-main-mid);
+  --s-color-echart-series-20: var(--s-color-theme-main-mid);
+  --s-color-echart-series-30: rgb(0,168,112, 0.16);
+  --s-color-echart-series-40: var(--s-color-theme-neutral-text-40);
+
+  /*jquery selectable*/
+  --s-color-ui-selectable-helper-border: #a7a9ac;
+
+  /*widget: */
+  /*widget: button*/
+  /*primary button*/
+  --s-color-button-primary-bg: var(--s-color-theme-main-mid);
+  --s-color-button-primary-bg-hover: var(--s-color-theme-main-mid-hover);
+  --s-color-button-primary-bg-active: var(--s-color-theme-main-mid);
+  --s-color-button-primary-bg-disabled: var(--s-color-theme-main-mid-disabled);
+  --s-color-button-primary-text: var(--s-color-theme-neutral-text-10);
+  --s-color-button-primary-border: var(--s-color-theme-main-mid);
+  --s-color-button-primary-border-hover: var(--s-color-theme-main-mid-hover);
+  --s-color-button-primary-border-active: var(--s-color-theme-main-mid);
+  --s-color-button-primary-border-disabled: var(--s-color-theme-main-mid-disabled);
+
+
+  /*status button 表格内bottom button  status-btns toolRow*/
+  --s-color-grid-status-btns-button-border: var(--s-color-theme-main-mid);
+  --s-color-grid-status-btns-button-cancel-bg: var(--s-color-theme-neutral-text-10);
+  --s-color-grid-status-btns-button-cancel-text: var(--s-color-theme-main-mid);
+  --s-color-grid-status-btns-button-cancel-text-hover: var(--s-color-theme-main-mid-hover);
+  --s-color-grid-status-btns-button-cancel-text-ative: var(--s-color-theme-main-mid);
+  --s-color-grid-status-btns-button-cancel-border-hover: var(--s-color-theme-main-mid-hover);
+  --s-color-grid-status-btns-button-cancel-border-active: var(--s-color-theme-main-mid);
+
+
+  /*语义为次级按钮，当前为线框按钮msg-cancel msg-no monitor-stop */
+  --s-color-button-secondary-bg: var(--s-color-theme-neutral-bg-30);
+  --s-color-button-secondary-bg-hover: var(--s-color-theme-neutral-bg-50);
+  --s-color-button-secondary-bg-active: var(--s-color-theme-neutral-bg-50);
+  --s-color-button-secondary-bg-disabled: var(--s-color-theme-neutral-bg-30);
+  --s-color-button-secondary-text: var(--s-color-theme-neutral-text-40);
+  --s-color-button-secondary-text-active: var(--s-color-theme-neutral-text-40);
+  --s-color-button-secondary-text-disabled: var(--s-color-theme-neutral-text-30);
+  --s-color-button-secondary-border: var(--s-color-theme-neutral-bg-30);
+  --s-color-button-secondary-border-hover: var(--s-color-theme-neutral-bg-50);
+  --s-color-button-secondary-border-active: var(--s-color-theme-neutral-bg-50);
+  --s-color-button-secondary-border-disabled: var(--s-color-theme-neutral-bg-30);
+
+  /*monitor-stop button*/
+  --s-color-button-rare-border-disabled: var(--s-color-button-secondary-border-disabled);
+  --s-color-button-rare-bg-disabled: var(--s-color-theme-neutral-bg-30);
+
+  /*widget: text-wrap  form控件wraper：textbox password...*/
+  --s-color-wdiget-text-wrap-bg-readonly: transparent;
+  --s-color-wdiget-text-wrap-bg-readonly-hover-focus: var(--s-color-theme-neutral-bg-10);
+  --s-color-wdiget-text-wrap-border: var(--s-color-theme-neutral-bg-30);
+  --s-color-wdiget-text-wrap-border-disabled: var(--s-color-theme-neutral-bg-50);
+  --s-color-wdiget-text-wrap-border-hover: var(--s-color-theme-main-mid-hover);
+  --s-color-wdiget-text-wrap-border-focus: var(--s-color-theme-main-mid-hover);
+  --s-color-wdiget-text-wrap-input-bg: transparent;
+  --s-color-wdiget-text-wrap-error-border: var(--s-color-theme-error);
+
+
+  /*widget: combobox*/
+  --s-color-combobox-bg: transparent;
+  --s-color-combobox-bg-readonly: transparent;
+  --s-color-combobox-border: var(--s-color-theme-neutral-bg-30);
+  --s-color-combobox-border-hover: var(--s-color-theme-main-mid-hover);
+  --s-color-combobox-border-focus: var(--s-color-theme-main-mid-hover);
+  --s-color-combobox-border-disabled: var(--s-color-theme-neutral-bg-50);
+  --s-color-combobox-error-border: var(--s-color-theme-error);
+  --s-color-combobox-list-wrap-bg: var(--s-color-theme-neutral-bg-10);
+  --s-color-combobox-list-item-bg-selected: var(--s-color-theme-neutral-bg-10);
+  --s-color-combobox-list-item-text-selected: var(--s-color-theme-main-mid);
+  --s-color-combobox-list-item-bg-hover:  var(--s-color-theme-neutral-bg-30);
+  --s-color-combobox-list-item-border: var(--s-color-theme-neutral-bg-10);
+
+
+
+  /*widget: grid*/
+  /*公共*/
+  --s-color-grid-container-border: var(--s-color-theme-neutral-bg-50); /*表格内容区，不包含操作按钮和分页和底部total，表头+内容区*/
+  /*表头和表底*/
+  --s-color-grid-header-th-colspan-border: var(--s-color-theme-neutral-bg-50);
+  --s-color-grid-header-container-border: var(--s-color-theme-neutral-bg-50);
+  --s-color-grid-header-container-bg: var(--s-color-theme-neutral-bg-20);
+  /*status bar 表底*/
+  --s-color-grid-status-bar-container-border: var(--s-color-theme-neutral-bg-50);
+  --s-color-grid-status-bar-container-bg: var(--s-color-theme-neutral-bg-20);
+  /*operation 和 search*/
+  --s-color-grid-operation-conplex-search-button-text: var(--s-color-theme-neutral-text-50);
+  --s-color-grid-operation-conplex-search-button-text-hover: var(--s-color-theme-main-mid-hover);
+  --s-color-grid-operation-conplex-search-button-text-active: var(--s-color-theme-main-mid);
+  /*opeartion*/
+  --s-color-grid-operation-button-text-disabled: var(--s-color-theme-neutral-text-20);
+  --s-color-grid-operation-button-delete-text-hover: var(--s-color-theme-error-hover);
+  --s-color-grid-operation-button-delete-text-active: var(--s-color-theme-error);
+  --s-color-grid-operation-button-resequence-text-hover: var(--s-color-theme-warn);
+  --s-color-grid-operation-button-resequence-text-active: var(--s-color-theme-warn);
+  /*conplex search content*/
+  --s-color-grid-conplex-search-border: var(--s-color-theme-neutral-bg-50); /*l2 feature mac address, 点击search 下拉展开行*/
+  --s-color-grid-conplex-search-bar-widget-text: var(--s-color-theme-neutral-text-50); /*grid search bar*/
+  /*content 内容区*/
+  --s-color-grid-content-btn-status-text: #000000;
+  --s-color-grid-content-text-disabled: var(--s-color-theme-neutral-text-20);
+  --s-color-grid-content-tr-border: var(--s-color-theme-neutral-bg-50);
+  --s-color-grid-content-tr-bg-hover: var(--s-color-theme-neutral-bg-40);
+  --s-color-grid-content-tr-bg-selected: rgba(0, 168, 112, 0.1);
+  --s-color-grid-content-tr-row-selected-bg: #d0d0d0;
+  /*表头下，和第一行内容间，操作行*/
+  --s-color-grid-tool-row-border-b: var(--s-color-theme-neutral-bg-50);
+  --s-color-grid-tool-row-border-r: var(--s-color-theme-neutral-bg-50);
+  --s-color-grid-tool-row-bg: var(--s-color-theme-neutral-bg-20);
+  --s-color-grid-tool-row-text-wrap-combobox-wrap-border: var(--s-color-theme-neutral-bg-50);
+  --s-color-grid-tool-row-text-wrap-combobox-wrap-bg: var(--s-color-theme-neutral-bg-10);
+  --s-color-grid-tool-row-combobox-wrap-input-bg: transparent;
+  --s-color-grid-tool-row-text-wrap-input-bg: transparent;
+  /*operation 列*/
+  --s-color-grid-content-action-column-link-text: var(--s-color-theme-main-mid); /*内容区 opertion column*/
+
+  /* 分页器 */
+  --s-color-grid-paging-fbar-border: var(--s-color-theme-neutral-bg-50); /*分页和表格的分割线*/
+  --s-color-grid-paging-fbar-bg: var(--s-color-theme-neutral-bg-50);
+  --s-color-grid-paging-bg: var(--s-color-theme-neutral-bg-10);
+  --s-color-grid-paging-current-bg: rgba(0, 168, 112, 0.1);
+  --s-color-grid-paging-button-current-text-hover: var(--s-color-theme-main-mid);
+  --s-color-grid-paging-button-text: var(--s-color-theme-neutral-text-50);
+  --s-color-grid-paging-button-border: var(--s-color-theme-neutral-bg-10);
+  --s-color-grid-paging-button-num-border: transparent;
+  --s-color-grid-paging-link-text: var(--s-color-theme-neutral-text-50);
+
+
+  /*widget: navigator and tab*/
+  --s-color-navigator-bg: transparent; /*navigator*/
+  --s-color-tab-navigator-bg: transparent; /*tab*/
+  --s-color-navigator-item-sub-text: var(--s-color-theme-neutral-text-50); /*tab and navigator*/
+  --s-color-navigator-item-sub-text-selected: var(--s-color-theme-neutral-text-50);
+  --s-color-navigator-item-sub-bg: var(--s-color-theme-neutral-bg-10);
+  /*widget: tab*/
+  /*tab-container : tab 容器   navigator -> 下一层容器   带有grid tab的是表格tab   .light 是cpu monitor 下的tab，白色模式 */
+  /*tab*/
+  --s-color-tab-item-text: var(--s-color-theme-neutral-text-50);
+  --s-color-tab-item-text-selected: var(--s-color-theme-main-mid);
+  /*tab.grid-tab*/
+  --s-color-tab-grid-item-border: var(--s-color-theme-neutral-bg-50);
+  --s-color-tab-grid-item-border-hover: var(--s-color-theme-neutral-bg-50);
+  --s-color-tab-grid-item-border-selected: var(--s-color-theme-neutral-bg-50);
+  --s-color-tab-grid-item-border-b-hover: var(--s-color-theme-neutral-bg-50);
+  --s-color-tab-grid-item-border-b-selected: var(--s-color-theme-neutral-bg-50);
+  --s-color-tab-grid-item-bg: var(--s-color-theme-neutral-bg-10);
+  --s-color-tab-grid-item-bg-selected: rgba(0, 168, 112, 0.2);
+  --s-color-tab-grid-item-bg-hover: rgba(0, 168, 112, 0.06);
+  --s-color-tab-grid-item-text: var(--s-color-theme-neutral-text-50);
+  --s-color-tab-grid-item-text-hover: var(--s-color-theme-neutral-text-50);
+  --s-color-tab-grid-item-text-selected: var(--s-color-theme-neutral-text-50);
+  --s-color-tab-grid-item-after-bg: transparent;
+  /*tab.grid-tab.light*/
+  --s-color-tab-grid-light-item-border: var(--s-color-theme-neutral-bg-50);
+  --s-color-tab-grid-light-item-border-hover: var(--s-color-theme-neutral-bg-50);
+  --s-color-tab-grid-light-item-border-selected: var(--s-color-theme-neutral-bg-50);
+  --s-color-tab-grid-light-item-border-b-hover: var(--s-color-theme-neutral-bg-50);
+  --s-color-tab-grid-light-item-border-b-selected: var(--s-color-theme-neutral-bg-50);
+  --s-color-tab-grid-light-item-text-selected: var(--s-color-theme-neutral-text-50);
+  --s-color-tab-grid-light-item-bg-selected: rgba(0, 168, 112, 0.2);
+  --s-color-tab-grid-light-item-after-bg: transparent;
+  /*tab.grid-tab-display-table-tab*/
+
+  --s-color-tab-grid-display-item-text: var(--s-color-theme-neutral-text-50);
+  --s-color-tab-grid-display-item-border: var(--s-color-theme-neutral-bg-50);
+  --s-color-tab-grid-display-item-bg: var(--s-color-theme-neutral-text-10);
+  --s-color-tab-grid-display-item-bg-selected: rgba(0, 168, 112, 0.2);
+  --s-color-tab-grid-display-item-bg-hover: rgba(0, 168, 112, 0.06);
+
+
+  /*widget: fieldset*/
+  --s-color-fieldset-visible-expand-border: #b5b8c8;
+  --s-color-fieldset-visible-legend-first-bg: #ffffff;
+  --s-color-fieldset-visible-collapse-border: #b5b8c8;
+
+  /*widget: tooltip*/
+  --s-color-tooltip-box-default: rgba(43, 43, 43, 0.96);
+  --s-color-tooltip-text-box-border: var(--s-color-tooltip-box-default);
+  --s-color-tooltip-text-box-text: var(--s-color-theme-neutral-text-10);
+  --s-color-tooltip-text-box-bg: var(--s-color-tooltip-box-default);
+  --s-color-tooltip-text-box-shadow: var(--s-color-tooltip-box-default);
+  --s-color-tooltip-p-text: var(--s-color-theme-neutral-text-10);
+
+  /*widget: msg*/
+  --s-color-msg-title-bg: var(--s-color-theme-main-mid);
+  --s-color-msg-global-title-bg: var(--s-color-theme-neutral-bg-10);
+  --s-color-msg-title-text: var(--s-color-theme-neutral-text-10);
+  --s-color-msg-wrap-border: var(--s-color-theme-neutral-bg-50);
+  --s-color-msg-wrap-bg: var(--s-color-theme-neutral-bg-10);
+  --s-color-msg-content-btn-container-border: var(--s-color-theme-neutral-bg-50);
+  /*widget: about msg*/
+  --s-color-about-msg-title-text: var(--s-color-theme-neutral-text-50);
+  --s-color-about-msg-content-link-text: var(--s-color-theme-main-link);
+  /*widget: help msg*/
+  --s-color-help-msg-wrap-bg: var(--s-color-theme-neutral-bg-10);
+  --s-color-help-msg-wrap-shadow: rgba(0, 0, 0, 0.25);
+  --s-color-help-msg-content-text: var(--s-color-theme-neutral-text-50);
+  --s-color-help-msg-content-h4-border: var(--s-color-theme-neutral-bg-60);
+  /*widget: notes*/
+  --s-color-notes-li-text: var(--s-color-theme-neutral-text-30);
+  /*widget: progressbar*/
+  --s-color-progressbar-content-bg: var(--s-color-theme-neutral-bg-50);
+  --s-color-progressbar-content-value-bg: var(--s-color-theme-main-mid);
+  /*widget: mask*/
+  --s-color-mask-bg: rgba(0, 0, 0, 0.4);
+  /*widget: loading*/
+  --s-color-loading-container-inner-bg: var(--s-color-theme-neutral-bg-10);
+  --s-color-first-loading-text: var(--s-color-theme-neutral-text-50);
+  --s-color-first-loading-bg: var(--s-color-theme-neutral-bg-20);
+  --s-color-first-loading-shadow: rgba(0, 0, 0, 0.20);
+
+  /*widget: noticeBar and toast*/
+  --s-color-noticebar-bg: var(--s-color-theme-main-mid);
+  --s-color-noticebar-border: var(--s-color-theme-main-mid);
+  /*widget: toast*/
+  --s-color-noticebar-smb-bg: var(--s-color-theme-main-mid);
+  --s-color-noticebar-smb-fail-bg: var(--s-color-theme-error);
+  --s-color-noticebar-smb-text: var(--s-color-theme-neutral-text-10);
+  /*widget: panel*/
+  --s-color-panel-header-border-b: var(--s-color-theme-neutral-bg-60);
+  --s-color-panel-header-h3-text: var(--s-color-theme-neutral-text-50);
+  --s-color-panel-tbar-fbar-bg: var(--s-color-theme-neutral-bg-10);
+  /*widget form ports*/
+  --s-color-ports-detail-info-title-border-b: #36444B;
+  --s-color-ports-detail-info-border: #36444B;
+  --s-color-ports-detail-info-bg: var(--s-color-theme-neutral-bg-10);
+  /*widget: file*/
+  --s-color-file-file-text-border: var(--s-color-theme-neutral-bg-30);
+  /*widget: checkbox*/
+  --s-color-checkbox-label-text: var(--s-color-theme-neutral-text-50);
+
+
+  /*widget common*/
+  --s-color-widget-label-input-text-separator-redio-list-text-disabled: var(--s-color-theme-neutral-text-20);
+  --s-color-widget-text-combobox-border-disabled: var(--s-color-theme-neutral-bg-50);
+  --s-color-widget-text-combobox-bg-disabled: var(--s-color-theme-neutral-bg-30);
+  --s-color-widget-text-combobox-bg: var(--s-color-theme-neutral-bg-30);
+  --s-color-widget-input-label-text-readonly: var(--s-color-theme-neutral-text-50);
+
+  /*widget common: tips*/
+  --s-color-widget-tips-content-text: var(--s-color-theme-neutral-text-40);
+  --s-color-widget-tips-error-wrap-bg: transparent;
+  --s-color-widget-tips-error-content-text: var(--s-color-theme-error);
+  /*nice scroll*/
+  --s-color-nicescroll-online-update-version-content-bg: var(--s-color-theme-neutral-bg-10);
+  --s-color-nicescroll-cursors-bg: var(--s-color-theme-neutral-bg-60);
+  --s-color-nicescroll-cursors-bg-hover: var(--s-color-theme-neutral-bg-60);
+  --s-color-nicescroll-cursors-bg-active: var(--s-color-theme-neutral-bg-60);
+  --s-color-nicescroll-rails-vr-bg: transparent;
+  --s-color-nicescroll-vr-arrow-up-and-down-ctn-bg: var(--s-color-theme-neutral-bg-10);
+
+  /*page*/
+  /*page: login webAuthRpm*/
+  --s-color-login-module-bg: #36444B;
+  --s-color-login-area-login-pwd-control-reset-bg: var(--s-color-theme-neutral-bg-10);
+  --s-color-login-area-login-pwd-control-reset-shadow: rgba(0, 0, 0, 0.20);
+  --s-color-login-area-login-pwd-title-text: var(--s-color-theme-neutral-bg-10);
+  --s-color-login-area-login-pwd-error-info-text: var(--s-color-theme-error);
+  --s-color-login-area-login-pwd-display-label-text: var(--s-color-theme-neutral-text-50);
+  --s-color-login-area-login-pwd-text-wrap-bg: var(--s-color-theme-neutral-bg-10);
+  --s-color-login-area-login-pwd-input-bg: var(--s-color-theme-neutral-bg-10);
+  --s-color-login-area-login-pwd-error-wdiget-wrap-border: var(--s-color-theme-error);
+  --s-color-login-area-login-pwd-display-label-container-text: var(--s-color-theme-neutral-text-50);
+  --s-color-login-area-standalone-bg: var(--s-color-theme-neutral-bg-10);
+  --s-color-login-area-standalone-shadow: rgba(0, 0, 0, 0.20);
+  --s-color-login-area-error-info-normal-text: var(--s-color-theme-neutral-text-50);
+  --s-color-login-hint-pwd-title-text: var(--s-color-theme-neutral-text-40);
+  --s-color-login-hint-omada-standalone-reset-text: var(--s-color-theme-neutral-text-40);
+  --s-color-login-widget-wrap-border: var(--s-color-theme-neutral-text-50);
+  --s-color-login-widget-wrap-border-focus: var(--s-color-theme-main-mid);
+  --s-color-login-server-error-bg: var(--s-color-theme-neutral-bg-20);
+  --s-color-login-server-error-text: var(--s-color-theme-error);
+  --s-color-login-remember-tips-content-text: var(--s-color-theme-main-mid);
+  --s-color-login-ssh-fieldset-border: var(--s-color-theme-neutral-bg-50);
+  /*data-collection-tips*/
+  --s-color-login-tips-data-collection-text: var(--s-color-theme-neutral-text-40);
+  --s-color-login-tips-data-collection-auto-check-text-box-border: var(--s-color-tooltip-box-default);
+  --s-color-login-tips-data-collection-auto-check-text-box-bg: var(--s-color-tooltip-box-default);
+  --s-color-login-tips-data-collection-auto-check-text-box-shadow-l: rgb(54 62 77 / 24%);
+  --s-color-login-tips-data-collection-auto-check-text-box-shadow-r: rgb(54 62 77 / 12%);
+  --s-color-login-tips-data-collection-auto-check-text-box-p-text: var(--s-color-theme-neutral-text-10);
+  --s-color-login-tips-data-collection-auto-check-icon-delta-border-r: var(--s-color-tooltip-box-default);
+  --s-color-login-tips-data-collection-auto-check-icon-delta-border-t-b: transparent;
+
+
+  /*page: L3_features interface*/
+  --s-color-l3features-interface-detail-second-ip-border: var(--s-color-theme-neutral-bg-50);
+  --s-color-l3features-interface-detail-second-ip-paragraph-outer-text: var(--s-color-theme-neutral-text-50);
+  --s-color-l3features-interface-detail-table-td-border: var(--s-color-theme-neutral-bg-50);
+  --s-color-l3features-interface-detail-table-paragraph-outer-text: var(--s-color-theme-neutral-text-50);
+  --s-color-l3features-interface-add-line-border: var(--s-color-theme-neutral-bg-50);
+  --s-color-l3features-interface-detailInterfaceMsg-receive-send-bg: var(--s-color-theme-neutral-bg-20);
+  /*page: l3_feature dhcp_service dhcp_server packer_stat*/
+  --s-color-l3features-dhcp-packet-th-td-2-border-r: var(--s-color-theme-neutral-bg-50);
+  /*page: l2_features lldp lldpMedPortConfig*/
+  --s-color-l2features-lldp-portconfig-emergency-num-disabled-label-text: var(--s-color-theme-neutral-text-50);
+  --s-color-l2features-lldp-portconfig-tlv-example-examplebar-item-text: var(--s-color-theme-neutral-text-40);
+  /*page: l2_features lldp lldpstaticinfo*/
+  --s-color-l2features-lldp-staticinfo-color-header-grid-header-bg: var(--s-color-theme-neutral-bg-20);
+
+  /*page: ctrlSettings*/
+  --s-color-ctrlsettings-privacy-policy-tips-text: var(--s-color-theme-neutral-text-40);
+  --s-color-ctrlsettings-privacy-policy-link-text: var(--s-color-theme-main-link);
+
+  /*page: timeRangeSummary*/
+  --s-color-timeRangeSummary-timeRangeSummaryCfgDetailItemGrid-content-tr-border-b: var(--s-color-theme-neutral-bg-50);
+  --s-color-timeRangeSummary-timeRangeSummaryCfgDetailItemGrid-grid-container-border: var(--s-color-theme-neutral-bg-50);
+  --s-color-timeRangeSummary-time-range-msg-grid-content-outer-bg: var(--s-color-theme-neutral-bg-10);
+  --s-color-timeRangeSummary-time-range-msg-grid-tr-bg-selected: var(--s-color-theme-neutral-bg-10);
+  --s-color-timeRangeSummary-time-range-msg-grid-tr-bg-hover: var(--s-color-theme-neutral-bg-10);
+
+  /*page: traffic_montior / traffic_montior2 */
+  --s-color-traffic-montior-detailMsgTraffic-displaylabel-border: var(--s-color-theme-neutral-bg-50);
+  /*page: system: system -> system_info -> sys_summary/sys_summary_stack*/
+  --s-color-sys-summary-legend-ctn-rx-widget-wrap-outer-border: var(--s-color-theme-neutral-text-40);
+  --s-color-sys-summary-legend-ctn-tx-widget-wrap-outer-border: var(--s-color-theme-main-mid);
+  --s-color-sys-summary-utilization-ctn-rx-widget-wrap-outer-text: var(--s-color-theme-neutral-text-40);
+  --s-color-sys-summary-utilization-ctn-tx-widget-wrap-outer-text: var(--s-color-theme-main-mid);
+  --s-color-sys-summary-fieldlabel-text: var(--s-color-theme-neutral-text-50);
+  --s-color-sys-summary-sys-info-fan-field-legend-bg: transparent;
+
+  /*page: system:  system_tool fimward_msg fimward_upgrade*/
+  --s-color-system-tool-update-bg: var(--s-color-theme-error);
+  --s-color-system-tool-latest-v-text: var(--s-color-theme-main-link);
+  /*page: maintenance -> mirror ->  port_mirror */
+  --s-color-port-mirror-table-border: var(--s-color-theme-neutral-bg-50);
+  /*page: security\acl\acl_config*/
+  --s-color-security-acl-config-fieldset-with-border-widget-border: var(--s-color-theme-neutral-bg-50);
+  /*page: maintenance systemMonitor  cpuMonitor\memoryMonitor*/
+  --s-color-system-monitor-cpuInfoInputCls-text-container-wrap-bg: var(--s-color-theme-neutral-bg-20);
+
+  /*common class*/
+  /*common class: display-table-ctn / display-table  */
+  --s-color-display-table-ctn-displaylabel-editable-grid-title-bg: transparent;
+  --s-color-display-table-ctn-displaylabel-bg: var(--s-color-theme-neutral-text-10);
+  --s-color-display-table-ctn-displaylabel-after-border: var(--s-color-theme-neutral-bg-50);
+  --s-color-display-table-ctn-displaylabel-title-bg: var(--s-color-theme-neutral-bg-20);
+  --s-color-display-table-ctn-displaylabel-text-wrap-display-text: var(--s-color-theme-neutral-text-50);
+  --s-color-display-table-ctn-paragraph-no-entry-hint-bg: var(--s-color-theme-neutral-bg-20);
+  --s-color-display-table-ctn-paragraph-title-bg: var(--s-color-theme-neutral-bg-20);
+  --s-color-display-table-ctn-paragraph-title-border: var(--s-color-theme-neutral-bg-50);
+  --s-color-display-table-ctn-no-title-second-col-border: var(--s-color-theme-neutral-bg-50);;
+  --s-color-display-table-ctn-no-title-right-border: var(--s-color-theme-neutral-bg-50);
+  --s-color-display-table-ctn-no-title-displaylabel-title-bg: var(--s-color-theme-neutral-bg-20);
+  --s-color-display-table-border-top-border: var(--s-color-theme-neutral-bg-50);
+  --s-color-display-table-grid-content-container-outer-bg: var(--s-color-theme-neutral-bg-10);
+  --s-color-display-table-grid-content-tr-border: var(--s-color-theme-neutral-bg-50);
+  --s-color-display-table-area-bg: var(--s-color-theme-neutral-bg-20); /*page:network diagnose*/
+
+  /*common class: monitor-panel*/
+  --s-color-monitor-panel-bg: var(--s-color-theme-neutral-bg-20);
+  --s-color-monitor-panel-border: var(--s-color-theme-neutral-bg-50);
+  /*common class: send*/
+  --s-color-send-bg: var(--s-color-theme-neutral-bg-20);
+  /*common class: receive*/
+  --s-color-receive-bg: var(--s-color-theme-neutral-bg-20);
+  /*common class: port-interface*/
+  --s-color-port-interface-bg: var(--s-color-theme-neutral-bg-10);
+  --s-color-port-interface-empty-port-bg: transparent;
+  /*common class: tlv-column*/
+  --s-colortlv-column-td-unselected-span-text: var(--s-color-theme-neutral-text-20);
+  /*common class: display-table-tab*/
+  --s-color-display-table-tab-border: var(--s-color-theme-neutral-bg-50);
+  /*common class：collapsable-fieldset*/
+  --s-color-collapsable-fieldset-after-border: var(--s-color-theme-neutral-bg-5);
+
+
+
+
+  /*unknow selector*/
+  --s-color-menu-bg-bg: #e1e1e1; /*.menu-bg*/
+  --s-color-date-cnt-and-time-cnt-border: #bebebe; /*date-cnt*/
+  --s-color-content-wrap-bg: #ffffff; /*content-wrap*/
+  --s-color-content-wrap-border: #c1c2c4; /*content-wrap*/
+  /*unknow selector: button*/
+  /*unknow selector: button  .steel unuse; 比primary按钮主色更深*/
+  --s-color-button-container-steel-a-button-bg: #176771;
+  --s-color-button-container-steel-a-button-bg-hover: #3198a4;
+  --s-color-button-container-steel-a-button-bg-active: #004c59;
+
+  /*unknow selector: button 表格右上角refresh 文字button use in sys_summary / sys_summary_stack 已被注释，没用到*/
+  --s-color-button-container-display-table-top-a-button-bg: transparent;
+  --s-color-button-container-display-table-top-a-button-text-span-text: #36444B;
+  --s-color-button-container-display-table-top-a-button-text-span-text-hover: #4ACBD6;
+
+  /*unknow selector: button 线框按钮类，.btn-white没用到*/
+  --s-color-button-container-btn-white-a-button-bg: #ffffff;
+  --s-color-button-container-btn-white-a-button-text-span-text: #4acbd6;
+  --s-color-button-container-btn-white-a-button-bg-hover: #ebf9fa;
+  --s-color-button-container-btn-white-a-button-bg-active: #4acbd6;
+  --s-color-button-container-btn-white-a-button-text-span-text-active: #ffffff;
+  /*unknow selector: div.widget-container.notice-wrap*/
+  --s-color-widget-container-notice-wrap-bg: #ffffff;
+  --s-color-widget-container-notice-wrap-border: #c1c2c4;
+  /*unknow selector: .merge-edit*/
+  --s-color-merge-edit-grid-content-td-action-column-bg: #ffffff;
+
+  /*unuseless selector*/
+    /*common class: detailFormCls*/
+    --s-color-detailFormCls-bg: #F7F7F7;
+    /*common class: detailInputCls*/
+    --s-color-detailInputCls-text-container-widget-wrap-bg: #F7F7F7;
+    /*page: qos -> policy_config*/
+    --s-color-qos-policy-detailMsg-combobox-bg: #ffffff;/* qos-> diff_serv*/
+    --s-color-qos-policy-detailMsg-receive-header-bg: #eaeded;/*qos-> diff_serv*/
+    --s-color-qos-policy-detailMsg-receive-displaylabel-detailInputCls-border-b: #ededed;/*qos-> diff_serv*/
+    /*common class: port_index_cnt*/
+    --s-color-port-index-cnt-bg: rgba(73, 202, 214, 0.30);/* qos-> diff_serv*/
+
+    /*widget common bubble; only use in diff_serv*/
+    --s-color-widget-bubble-border: #a7a9ac;
+    --s-color-widget-bubble-text: #a7a9ac;
+    --s-color-widget-bubble-bg: #ffffff;
+
+    /*表格编辑行，项目未使用*/
+    --s-color-grid-editor-tr-bg: #ebe6e6;
+    --s-color-grid-editor-tr-button-border: #bbbbbb;
+    --s-color-grid-editor-tr-button-border-hover: #9d9d9d;
+    --s-color-grid-editor-tr-button-bg-hover: #a7a9ac;
+    --s-color-grid-editor-tr-button-bg: #ebe6e6;
+    --s-color-grid-editor-tr-button-wrap-border: #d0d0d0;
+    /*.unflexible unuseless*/
+    --s-color-fieldset-visible-unflexible-grid-border: #b5b8c8;
+    /*.menu-bg  unuseless*/
+    --s-color-scroll-layer-menu-bg-border: #ebebeb;
+    /*.date-picker  unuseless*/
+    --s-color-datepicker-border: #a7a9ac;
+      /*file: 未生效*/
+  --s-color-file-wrap-bg: transparent;
+  --s-color-file-file-input-bg: var(--s-color-theme-neutral-bg-10);
+  --s-color-file-file-text-border-hover: #e6e6e6;
+  --s-color-file-file-text-bg-hover: #f5f5f5;
+   /*number*/
+   --s-color-number-switch-border: #cccccc;
+   /*tip*/
+  --s-color-tip-wrap-bg: #ffffff;
+  --s-color-tip-wrap-border: #cccccc;
+    /*panel*/
+    --s-color-panel-header-button-text: #ffffff;
+    --s-color-panel-header-button-border: #cccccc;
+    
+  --s-color-button-login-full-border: #aaaaaa;
+  --s-color-button-login-full-bg: #eeeeee;
+    /*button.button-button*/
+    --s-color-button-border: #aaaaaa;
+    --s-color-button-bg: #eeeeee;
+    --s-color-button-border-pressed: #999999;
+    --s-color-button-bg-pressed: #aaaaaa;
+    --s-color-button-text-pressed: #ffffff;
+}

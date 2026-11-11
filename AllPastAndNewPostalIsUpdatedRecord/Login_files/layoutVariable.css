@@ -1,0 +1,24 @@
+:root {
+  --s-color-side-menu-secondary-item-before-bg: transparent;
+
+  --s-color-scroll-layer-border: transparent;
+  --s-color-scroll-layer-main-bg-border: var(--s-color-theme-neutral-bg-10);
+
+  --s-color-button-icon-bg: transparent;
+  --s-color-button-icon-bg-hover: transparent;
+  --s-color-button-icon-border-hover: transparent;
+  --s-color-button-nav-link-bg: transparent;
+  --s-color-button-nav-link-text: var(--s-color-theme-main-link);
+
+  --s-color-progressbar-fieldlabel-percentage-text: var(--s-color-theme-neutral-text-50);
+  --s-color-progressbar-global-content-bg: var(--s-color-theme-neutral-bg-50);
+
+  --s-color-fieldset-mask-bg: var(--s-color-theme-neutral-bg-10);
+  --s-color-fieldset-collapsable-legend-first-bg: var(--s-color-theme-neutral-bg-20);
+
+  --s-color-panel-mask-bg: var(--s-color-theme-neutral-bg-10);
+  --s-color-display-table-ctn-no-title-displaylabel-title-border: var(--s-color-theme-neutral-bg-50);
+  --s-color-detailInterfaceMsg-display-table-ctn-no-title-displaylabel-title-border: var(--s-color-theme-neutral-bg-50);
+  --s-color-border-bottom-border: var(--s-color-theme-neutral-bg-50);
+
+}
