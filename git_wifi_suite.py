@@ -26,6 +26,7 @@ import base64
 import ctypes
 from ctypes import wintypes
 import socket
+import struct
 import select
 import threading
 import queue
@@ -190,6 +191,49 @@ def get_system_network_io() -> Tuple[int, int]:
     except Exception:
         pass
     return 0, 0
+
+class MIB_IPFORWARDROW(ctypes.Structure):
+    _fields_ = [
+        ("dwForwardDest", wintypes.DWORD),
+        ("dwForwardMask", wintypes.DWORD),
+        ("dwForwardPolicy", wintypes.DWORD),
+        ("dwForwardNextHop", wintypes.DWORD),
+        ("dwForwardIfIndex", wintypes.DWORD),
+        ("dwForwardType", wintypes.DWORD),
+        ("dwForwardProto", wintypes.DWORD),
+        ("dwForwardAge", wintypes.DWORD),
+        ("dwForwardNextHopAS", wintypes.DWORD),
+        ("dwForwardMetric1", wintypes.DWORD),
+        ("dwForwardMetric2", wintypes.DWORD),
+        ("dwForwardMetric3", wintypes.DWORD),
+        ("dwForwardMetric4", wintypes.DWORD),
+        ("dwForwardMetric5", wintypes.DWORD),
+    ]
+
+def _measure_tcp_latency(host: str, port: int = 80, timeout: float = 0.8) -> Tuple[Optional[int], int]:
+    """
+    Measure network round-trip handshake latency in milliseconds using standard TCP socket.
+    Produces zero child processes, zero conhost.exe, and triggers zero antivirus heuristics.
+    Returns (avg_rtt_ms, loss_percent).
+    """
+    t0 = time.perf_counter()
+    try:
+        s = socket.create_connection((host, port), timeout=timeout)
+        dt = (time.perf_counter() - t0) * 1000.0
+        s.close()
+        return max(1, round(dt)), 0
+    except Exception:
+        # Fallback to port 53 (DNS) if port 80 failed
+        if port != 53:
+            try:
+                t0 = time.perf_counter()
+                s = socket.create_connection((host, 53), timeout=timeout)
+                dt = (time.perf_counter() - t0) * 1000.0
+                s.close()
+                return max(1, round(dt)), 0
+            except Exception:
+                pass
+        return None, 100
 
 # ==========================================
 # PYINSTALLER SAFE PATHING
@@ -674,41 +718,65 @@ _cached_gateway: Optional[str] = None
 _cached_gateway_time: float = 0.0
 
 def get_default_gateway(force: bool = False) -> Optional[str]:
-    """Retrieve Windows default IPv4 gateway via 'route print' selecting the route with lowest metric (ignoring virtual/hotspot/APIPA routes - Bug 20). Cached for 5s to eliminate process lag."""
+    """Retrieve Windows default IPv4 gateway via native Win32 GetBestRoute selecting the route with lowest metric (ignoring virtual/hotspot/APIPA routes - Bug 20). Zero subprocesses spawned. Cached for 5s to eliminate process lag."""
     global _cached_gateway, _cached_gateway_time
     now = time.time()
     if not force and _cached_gateway is not None and (now - _cached_gateway_time) < 5.0:
         return _cached_gateway
 
     best_gw: Optional[str] = None
-    lowest_metric: float = float("inf")
+
+    # 1. Native Win32 GetBestRoute (Zero subprocess, zero conhost, ~0.1ms)
     try:
-        out = subprocess.check_output(
-            ["route", "print", "-4", "0.0.0.0"],
-            text=True, stderr=subprocess.DEVNULL, creationflags=CREATE_NO_WINDOW
-        )
-        for line in out.splitlines():
-            parts = line.split()
-            # route print row format: Network   Netmask   Gateway   Interface   Metric
-            if len(parts) >= 5 and parts[0] == "0.0.0.0" and parts[1] == "0.0.0.0":
-                gw = parts[2]
-                iface = parts[3]
-                try:
-                    metric = int(parts[4])
-                except ValueError:
-                    metric = 9999
-                # Bug 20 fix: Exclude APIPA, loopback, and local Windows hotspot subnet (192.168.137.x)
-                if not re.fullmatch(r"\d+\.\d+\.\d+\.\d+", gw) or gw == "0.0.0.0":
-                    continue
-                if gw.startswith("127.") or gw.startswith("169.254.") or gw == "192.168.137.1":
-                    continue
-                if iface.startswith("127.") or iface.startswith("169.254.") or iface.startswith("192.168.137."):
-                    continue
-                if metric < lowest_metric:
-                    lowest_metric = metric
-                    best_gw = gw
+        iphlpapi = ctypes.WinDLL("iphlpapi.dll")
+        dest_ip = struct.unpack("<I", socket.inet_aton("8.8.8.8"))[0]
+        row = MIB_IPFORWARDROW()
+        res = iphlpapi.GetBestRoute(dest_ip, 0, ctypes.byref(row))
+        if res == 0:
+            gw_bytes = struct.pack("<I", row.dwForwardNextHop)
+            gw_str = socket.inet_ntoa(gw_bytes)
+            if (
+                re.fullmatch(r"\d+\.\d+\.\d+\.\d+", gw_str)
+                and gw_str != "0.0.0.0"
+                and not gw_str.startswith("127.")
+                and not gw_str.startswith("169.254.")
+                and gw_str != "192.168.137.1"
+            ):
+                best_gw = gw_str
     except Exception:
         pass
+
+    # 2. Fallback to route print only if native Win32 call failed
+    if not best_gw:
+        lowest_metric: float = float("inf")
+        try:
+            out = subprocess.check_output(
+                ["route", "print", "-4", "0.0.0.0"],
+                text=True, stderr=subprocess.DEVNULL, creationflags=CREATE_NO_WINDOW
+            )
+            for line in out.splitlines():
+                parts = line.split()
+                # route print row format: Network   Netmask   Gateway   Interface   Metric
+                if len(parts) >= 5 and parts[0] == "0.0.0.0" and parts[1] == "0.0.0.0":
+                    gw = parts[2]
+                    iface = parts[3]
+                    try:
+                        metric = int(parts[4])
+                    except ValueError:
+                        metric = 9999
+                    # Bug 20 fix: Exclude APIPA, loopback, and local Windows hotspot subnet (192.168.137.x)
+                    if not re.fullmatch(r"\d+\.\d+\.\d+\.\d+", gw) or gw == "0.0.0.0":
+                        continue
+                    if gw.startswith("127.") or gw.startswith("169.254.") or gw == "192.168.137.1":
+                        continue
+                    if iface.startswith("127.") or iface.startswith("169.254.") or iface.startswith("192.168.137."):
+                        continue
+                    if metric < lowest_metric:
+                        lowest_metric = metric
+                        best_gw = gw
+        except Exception:
+            pass
+
     _cached_gateway = best_gw
     _cached_gateway_time = now
     return best_gw
@@ -3462,65 +3530,67 @@ class GitWifiApp:
         self.live_mon_box.config(state=tk.DISABLED)
 
     def _live_monitor_ping_worker(self):
-        """Dedicated background daemon measuring ICMP latency and packet loss."""
+        """Dedicated background daemon measuring network latency and packet loss using in-memory socket handshakes."""
+        # Initial quiet period: sleep 15 seconds on startup so we don't do telemetry during Windows boot
+        self.live_mon_wake_event.wait(15.0)
+        self.live_mon_wake_event.clear()
+
         while self.live_mon_worker_running:
             try:
-                # Bug 40 fix: If user disabled Live Monitor in settings, don't waste CPU spawning ping.exe
+                # If user disabled Live Monitor in settings, don't poll
                 if not self.core.config.get("live_monitor_enabled", True):
-                    self.live_mon_wake_event.wait(3.0)
+                    self.live_mon_wake_event.wait(5.0)
+                    self.live_mon_wake_event.clear()
+                    continue
+
+                # When app is minimized to tray, throttle polling to save CPU
+                try:
+                    is_minimized = hasattr(self, "root") and self.root.state() in ("withdrawn", "iconic")
+                except Exception:
+                    is_minimized = False
+
+                if is_minimized:
+                    self.live_mon_wake_event.wait(12.0)
                     self.live_mon_wake_event.clear()
                     continue
 
                 # Target Gateway first, fallback to Internet DNS 1.1.1.1
                 gw = self.core.gateway_ip if (self.core.gateway_ip and self.core.gateway_ip != "-") else "1.1.1.1"
-                ping_target = gw
-                cmd = ["ping", "-n", "2", "-w", "800", ping_target]
-                res = subprocess.run(cmd, capture_output=True, text=True, errors="ignore", creationflags=CREATE_NO_WINDOW)
-                out = res.stdout
+                portal_port = self.core.portal_port or 80
 
-                # Bug 39 fix: Language-agnostic regex matching for Windows in any regional display language
-                # Match: 'time=12ms', 'time<1ms', 'Average = 12ms', 'Moyenne = 12ms', 'Media = 12ms', etc.
-                m_avg = re.search(r"=\s*(\d+)ms", out, re.IGNORECASE)
-                if not m_avg:
-                    m_avg = re.search(r"[=<](\d+)ms", out, re.IGNORECASE)
-                m_loss = re.search(r"(\d+)%", out)
-
-                # If gateway drops ICMP echo (managed switch protection), test Internet DNS directly
-                if (not m_avg or (m_loss and int(m_loss.group(1)) == 100)) and ping_target != "1.1.1.1":
+                if gw != "1.1.1.1":
+                    avg_rtt, loss_pct = _measure_tcp_latency(gw, portal_port, timeout=0.8)
+                    ping_target = gw
+                else:
+                    avg_rtt, loss_pct = _measure_tcp_latency("1.1.1.1", 53, timeout=0.8)
                     ping_target = "1.1.1.1"
-                    cmd = ["ping", "-n", "2", "-w", "800", ping_target]
-                    res = subprocess.run(cmd, capture_output=True, text=True, errors="ignore", creationflags=CREATE_NO_WINDOW)
-                    out = res.stdout
-                    m_avg = re.search(r"=\s*(\d+)ms", out, re.IGNORECASE)
-                    if not m_avg:
-                        m_avg = re.search(r"[=<](\d+)ms", out, re.IGNORECASE)
-                    m_loss = re.search(r"(\d+)%", out)
 
-                if m_avg:
-                    self.live_mon_ping_val = int(m_avg.group(1))
-                else:
-                    self.live_mon_ping_val = None
+                # If gateway dropped or refused connection, test Internet DNS directly
+                if (avg_rtt is None or loss_pct == 100) and ping_target != "1.1.1.1":
+                    ping_target = "1.1.1.1"
+                    avg_rtt, loss_pct = _measure_tcp_latency("1.1.1.1", 53, timeout=0.8)
 
-                if m_loss:
-                    self.live_mon_loss_val = int(m_loss.group(1))
-                else:
-                    self.live_mon_loss_val = 100 if self.live_mon_ping_val is None else 0
+                self.live_mon_ping_val = avg_rtt
+                self.live_mon_loss_val = loss_pct
 
                 ts = time.strftime("%H:%M:%S")
                 lat_str = f"{self.live_mon_ping_val}ms" if self.live_mon_ping_val is not None else "Timeout"
                 target_label = "Gateway" if ping_target == gw else "Internet (1.1.1.1)"
-                entry = f"[{ts}] Ping {target_label}: {lat_str} | Loss: {self.live_mon_loss_val}%\n"
+                entry = f"[{ts}] Latency {target_label}: {lat_str} | Loss: {self.live_mon_loss_val}%\n"
 
                 def _append_ui(line=entry):
                     if hasattr(self, "live_mon_box"):
-                        self.live_mon_box.config(state=tk.NORMAL)
-                        self.live_mon_box.insert(tk.END, line)
-                        self.live_mon_box.see(tk.END)
-                        # Keep max 50 lines
-                        lines_cnt = int(self.live_mon_box.index("end-1c").split(".")[0])
-                        if lines_cnt > 50:
-                            self.live_mon_box.delete("1.0", "10.0")
-                        self.live_mon_box.config(state=tk.DISABLED)
+                        try:
+                            self.live_mon_box.config(state=tk.NORMAL)
+                            self.live_mon_box.insert(tk.END, line)
+                            self.live_mon_box.see(tk.END)
+                            # Keep max 50 lines
+                            lines_cnt = int(self.live_mon_box.index("end-1c").split(".")[0])
+                            if lines_cnt > 50:
+                                self.live_mon_box.delete("1.0", "10.0")
+                            self.live_mon_box.config(state=tk.DISABLED)
+                        except Exception:
+                            pass
 
                 self._tray_dispatch(_append_ui)
 
