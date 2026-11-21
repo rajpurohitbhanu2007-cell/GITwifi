@@ -181,7 +181,7 @@ def get_system_network_io() -> Tuple[int, int]:
                     'virtual', 'wi-fi direct', 'direct virtual', 'vmware', 'virtualbox',
                     'hyper-v', 'vethernet', 'host-only', 'loopback', 'teredo', 'isatap',
                     'tap-windows', 'wireguard', 'tailscale', 'zerotier', 'npcap', 'pcap',
-                    'bluetooth'
+                    'bluetooth', 'cloudflare', 'warp'
                 ])
                 if not is_excluded and row.OperStatus == 1 and row.Type != 24:
                     tot_in += row.InOctets
@@ -714,11 +714,37 @@ def get_hotspot_bind_ip(campus_ip: Optional[str] = None) -> str:
 
     return "127.0.0.1"
 
+def is_dummy_or_vpn_gateway(ip_str: str) -> bool:
+    """Identify dummy, RFC 5737 test, loopback, APIPA, or VPN virtual gateways."""
+    if not ip_str or not re.fullmatch(r"\d+\.\d+\.\d+\.\d+", ip_str) or ip_str == "0.0.0.0":
+        return True
+    if (
+        ip_str.startswith("127.") or
+        ip_str.startswith("169.254.") or
+        ip_str.startswith("192.0.2.") or       # Cloudflare WARP / RFC 5737 TEST-NET-1
+        ip_str.startswith("198.51.100.") or    # RFC 5737 TEST-NET-2
+        ip_str.startswith("203.0.113.") or     # RFC 5737 TEST-NET-3
+        ip_str == "192.168.137.1"              # Windows Mobile Hotspot NAT
+    ):
+        return True
+    return False
+
+def is_virtual_adapter(alias: str, descr: str, if_type: int = 0) -> bool:
+    """Detect if network interface is a virtual adapter, tunnel, VPN, or loopback."""
+    combined = (alias + " " + descr).lower()
+    if if_type in (24, 131):  # 24=Software Loopback, 131=Tunnel
+        return True
+    return any(x in combined for x in [
+        'cloudflare', 'warp', 'wireguard', 'tailscale', 'zerotier', 'tap', 'tun',
+        'virtual', 'hyper-v', 'vethernet', 'host-only', 'vmware', 'virtualbox',
+        'loopback', 'wsl', 'bluetooth'
+    ])
+
 _cached_gateway: Optional[str] = None
 _cached_gateway_time: float = 0.0
 
 def get_default_gateway(force: bool = False) -> Optional[str]:
-    """Retrieve Windows default IPv4 gateway via native Win32 GetBestRoute selecting the route with lowest metric (ignoring virtual/hotspot/APIPA routes - Bug 20). Zero subprocesses spawned. Cached for 5s to eliminate process lag."""
+    """Retrieve Windows default IPv4 gateway on physical network interfaces (ignoring Cloudflare WARP, VPNs, virtual, hotspot, APIPA). Zero subprocesses spawned. Cached for 5s to eliminate process lag."""
     global _cached_gateway, _cached_gateway_time
     now = time.time()
     if not force and _cached_gateway is not None and (now - _cached_gateway_time) < 5.0:
@@ -726,27 +752,64 @@ def get_default_gateway(force: bool = False) -> Optional[str]:
 
     best_gw: Optional[str] = None
 
-    # 1. Native Win32 GetBestRoute (Zero subprocess, zero conhost, ~0.1ms)
+    # 1. Inspect GetIpForwardTable directly in-memory via iphlpapi (0 subprocesses, filters VPN/WARP)
     try:
         iphlpapi = ctypes.WinDLL("iphlpapi.dll")
-        dest_ip = struct.unpack("<I", socket.inet_aton("8.8.8.8"))[0]
-        row = MIB_IPFORWARDROW()
-        res = iphlpapi.GetBestRoute(dest_ip, 0, ctypes.byref(row))
-        if res == 0:
-            gw_bytes = struct.pack("<I", row.dwForwardNextHop)
-            gw_str = socket.inet_ntoa(gw_bytes)
-            if (
-                re.fullmatch(r"\d+\.\d+\.\d+\.\d+", gw_str)
-                and gw_str != "0.0.0.0"
-                and not gw_str.startswith("127.")
-                and not gw_str.startswith("169.254.")
-                and gw_str != "192.168.137.1"
-            ):
-                best_gw = gw_str
+        size = wintypes.ULONG(0)
+        iphlpapi.GetIpForwardTable(None, ctypes.byref(size), True)
+        if size.value > 0:
+            buf = ctypes.create_string_buffer(size.value)
+            if iphlpapi.GetIpForwardTable(buf, ctypes.byref(size), True) == 0:
+                num_entries = struct.unpack("<I", buf[:4])[0]
+                offset = 4
+                row_size = ctypes.sizeof(MIB_IPFORWARDROW)
+                lowest_metric = float("inf")
+
+                for _ in range(num_entries):
+                    row = MIB_IPFORWARDROW.from_buffer_copy(buf[offset:offset+row_size])
+                    offset += row_size
+
+                    # Check default route (0.0.0.0 / 0.0.0.0)
+                    if row.dwForwardDest == 0 and row.dwForwardMask == 0:
+                        gw_str = socket.inet_ntoa(struct.pack("<I", row.dwForwardNextHop))
+                        if is_dummy_or_vpn_gateway(gw_str):
+                            continue
+
+                        # Check adapter interface to skip VPN/tunnel/WARP interfaces
+                        alias, descr, if_type = "", "", 0
+                        try:
+                            if_row = MIB_IF_ROW2()
+                            if_row.InterfaceIndex = row.dwForwardIfIndex
+                            if iphlpapi.GetIfEntry2(ctypes.byref(if_row)) == 0:
+                                alias, descr, if_type = str(if_row.Alias).strip(), str(if_row.Description).strip(), if_row.Type
+                        except Exception:
+                            pass
+
+                        if is_virtual_adapter(alias, descr, if_type):
+                            continue
+
+                        metric = row.dwForwardMetric1
+                        if metric < lowest_metric:
+                            lowest_metric = metric
+                            best_gw = gw_str
     except Exception:
         pass
 
-    # 2. Fallback to route print only if native Win32 call failed
+    # 2. Fallback to GetBestRoute if GetIpForwardTable returned nothing
+    if not best_gw:
+        try:
+            iphlpapi = ctypes.WinDLL("iphlpapi.dll")
+            dest_ip = struct.unpack("<I", socket.inet_aton("8.8.8.8"))[0]
+            row = MIB_IPFORWARDROW()
+            res = iphlpapi.GetBestRoute(dest_ip, 0, ctypes.byref(row))
+            if res == 0:
+                gw_str = socket.inet_ntoa(struct.pack("<I", row.dwForwardNextHop))
+                if not is_dummy_or_vpn_gateway(gw_str):
+                    best_gw = gw_str
+        except Exception:
+            pass
+
+    # 3. Fallback to route print only if native Win32 calls failed
     if not best_gw:
         lowest_metric: float = float("inf")
         try:
@@ -764,12 +827,7 @@ def get_default_gateway(force: bool = False) -> Optional[str]:
                         metric = int(parts[4])
                     except ValueError:
                         metric = 9999
-                    # Bug 20 fix: Exclude APIPA, loopback, and local Windows hotspot subnet (192.168.137.x)
-                    if not re.fullmatch(r"\d+\.\d+\.\d+\.\d+", gw) or gw == "0.0.0.0":
-                        continue
-                    if gw.startswith("127.") or gw.startswith("169.254.") or gw == "192.168.137.1":
-                        continue
-                    if iface.startswith("127.") or iface.startswith("169.254.") or iface.startswith("192.168.137."):
+                    if is_dummy_or_vpn_gateway(gw) or is_dummy_or_vpn_gateway(iface):
                         continue
                     if metric < lowest_metric:
                         lowest_metric = metric
@@ -777,8 +835,13 @@ def get_default_gateway(force: bool = False) -> Optional[str]:
         except Exception:
             pass
 
-    _cached_gateway = best_gw
-    _cached_gateway_time = now
+    # 4. If all routes are VPN/WARP, preserve existing valid physical gateway
+    if not best_gw and _cached_gateway and not is_dummy_or_vpn_gateway(_cached_gateway):
+        return _cached_gateway
+
+    if best_gw:
+        _cached_gateway = best_gw
+        _cached_gateway_time = now
     return best_gw
 
 
@@ -1265,8 +1328,8 @@ class GitWifiCore:
         self.keepalive_url = None
         self.current_magic = None
         self.portal_host = self.config.get("portal_host") or "-"
-        live_gw = get_default_gateway()
-        self.gateway_ip = live_gw or self.config.get("last_gateway") or "-"
+        live_gw = get_default_gateway(force=True)
+        self.gateway_ip = live_gw or "-"
         self.portal_port = self.config.get("portal_port") or AppConstants.DEFAULT_PORTAL_PORT
         self.portal_scheme = self.config.get("portal_scheme") or "http"
         self.portal_type: str = "auto"
@@ -1418,8 +1481,9 @@ class GitWifiCore:
         - If config 'network_mode' is 'external' -> forced external.
         - If config 'network_mode' is 'auto' (default) -> intelligently auto-detect:
             1. Check if default gateway or local IPv4 belongs to campus subnets (172.7.x.x, 172.15.x.x, 10.17.x.x)
-            2. Check if active Wi-Fi SSID matches campus keywords (GIT, campus, hostel, college)
-            3. Otherwise defaults to 'external'.
+            2. If gateway is on an external subnet (e.g. 10.80.x.x hotspot, 192.168.x.x home), return external.
+            3. Check if active Wi-Fi SSID matches campus keywords (GIT, campus, hostel, college)
+            4. Otherwise defaults to 'external'.
         """
         mode = self.config.get("network_mode", "auto")
         if mode in ("campus", "external"):
@@ -1427,25 +1491,31 @@ class GitWifiCore:
 
         now = time.time()
         if hasattr(self, "_cached_eff_mode") and hasattr(self, "_cached_eff_mode_time"):
-            if (now - self._cached_eff_mode_time) < 4.0:
+            if (now - self._cached_eff_mode_time) < 3.0:
                 return self._cached_eff_mode
 
-        live_gw = get_default_gateway()
-        gw = str(live_gw or self.gateway_ip or "").strip()
-        loc = str(self.local_ip or "").strip()
+        live_gw = get_default_gateway(force=True)
         campus_prefixes = ("172.7.", "172.15.", "10.17.")
-        if any(gw.startswith(p) for p in campus_prefixes) or any(loc.startswith(p) for p in campus_prefixes):
+        if live_gw and any(live_gw.startswith(p) for p in campus_prefixes):
             res = "campus"
+        elif live_gw and live_gw != "-":
+            # Active gateway is present and NOT a campus subnet -> Definitively external
+            res = "external"
         else:
-            ssid = self.get_active_ssid()
-            if ssid:
-                s_lower = ssid.lower()
-                if any(kw in s_lower for kw in ("git", "campus", "hostel", "college")):
-                    res = "campus"
+            # Gateway not yet assigned or Wi-Fi disconnected; check local IP or SSID
+            loc = str(self.local_ip or "").strip()
+            if loc and any(loc.startswith(p) for p in campus_prefixes):
+                res = "campus"
+            else:
+                ssid = self.get_active_ssid()
+                if ssid:
+                    s_lower = ssid.lower()
+                    if any(kw in s_lower for kw in ("git", "campus", "hostel", "college")):
+                        res = "campus"
+                    else:
+                        res = "external"
                 else:
                     res = "external"
-            else:
-                res = "external"
 
         self._cached_eff_mode = res
         self._cached_eff_mode_time = now
@@ -1692,8 +1762,8 @@ class GitWifiCore:
                     status_candidates = [
                         f"{p_scheme}://{p_host}:{p_port}/api/captiveportal/access/status/",
                         "https://www.opn.gitjaipur.com:8000/api/captiveportal/access/status/",
-                        "http://172.15.1.2:8000/api/captiveportal/access/status/",
                         "https://172.15.1.2:8000/api/captiveportal/access/status/",
+                        "http://172.15.1.2:8000/api/captiveportal/access/status/",
                     ]
                     for cand_url in status_candidates:
                         try:
@@ -2042,7 +2112,7 @@ class GitWifiCore:
                     continue
 
                 # Auto-detect gateway first so profile auto-switching can match network
-                curr_gw = get_default_gateway() or self.gateway_ip
+                curr_gw = get_default_gateway(force=True)
                 profile = self.resolve_profile_for_network(curr_gw)
                 if not profile or not profile.get("username"):
                     self.set_status("No Profile Configured")
@@ -2154,7 +2224,7 @@ class GitWifiCore:
                 self.set_status("Shotgun Probing...")
 
             # Adapt to network transitions (Bug 15, Bug 55)
-            active_gw = gw or get_default_gateway()
+            active_gw = gw or get_default_gateway(force=True)
             if active_gw and active_gw != "-":
                 if self.gateway_ip != "-" and self.gateway_ip != active_gw:
                     self.log(f"[Network] Gateway transitioned from {self.gateway_ip} to {active_gw}. Resetting portal parameters.")
@@ -2168,6 +2238,8 @@ class GitWifiCore:
                         self.keepalive_url = None
                         self.current_magic = None
                 self.gateway_ip = active_gw
+            elif not active_gw:
+                self.gateway_ip = "-"
 
             try:
                 s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -2214,16 +2286,13 @@ class GitWifiCore:
                 # Try candidate fallback probes in prioritized order:
                 fallback_candidates = []
                 trusted_hosts = self.config.get("trusted_portal_hosts", [])
-                is_campus = (
-                    self.gateway_ip == "172.7.0.1" or
-                    "172.15.1.2" in trusted_hosts or
-                    "www.opn.gitjaipur.com" in trusted_hosts or
-                    self.portal_host in ("172.15.1.2", "www.opn.gitjaipur.com", "opn.gitjaipur.com") or
-                    (self.portal_host and self.portal_host.endswith(".gitjaipur.com")) or
-                    self.config.get("last_gateway") == "172.7.0.1"
+                eff_mode = self.get_effective_network_mode()
+                is_campus = (eff_mode == "campus") or (
+                    self.gateway_ip and any(self.gateway_ip.startswith(p) for p in ("172.7.", "172.15.", "10.17."))
                 )
                 if is_campus:
                     fallback_candidates.append("https://www.opn.gitjaipur.com:8000/index.html")
+                    fallback_candidates.append("https://172.15.1.2:8000/index.html")
                     fallback_candidates.append("http://172.15.1.2:8000/index.html")
 
                 # Outbound Internet IP (triggers captive portal redirect when gateway intercepts port 80)
@@ -2253,6 +2322,13 @@ class GitWifiCore:
                             break
 
                         if f_resp.url and norm_f_url != norm_target:
+                            parsed_f = urlparse(f_resp.url)
+                            f_host = (parsed_f.hostname or "").lower()
+                            if f_host in ("one.one.one.one", "1.1.1.1", "cloudflare.com") or f_host.endswith(".cloudflare.com"):
+                                self.log(f"[Probe] Received direct response from Cloudflare ({f_resp.url}) - Unrestricted Internet active.")
+                                fallback_resp = f_resp
+                                fallback_resp.status_code = 204
+                                break
                             fallback_resp = f_resp
                             break
 
@@ -2261,7 +2337,11 @@ class GitWifiCore:
                             break
 
                         if "index-view-container" in f_resp.text or "web switch" in str(f_resp.headers).lower():
-                            for cand_target in ("https://www.opn.gitjaipur.com:8000/index.html", "http://172.15.1.2:8000/index.html"):
+                            for cand_target in (
+                                "https://www.opn.gitjaipur.com:8000/index.html",
+                                "https://172.15.1.2:8000/index.html",
+                                "http://172.15.1.2:8000/index.html"
+                            ):
                                 try:
                                     opn_resp = self.session.get(cand_target, timeout=3.0, verify=False)
                                     if opn_resp.status_code == 200 and ("/api/captiveportal" in opn_resp.text or "inputUsername" in opn_resp.text):
@@ -2340,6 +2420,17 @@ class GitWifiCore:
                     self.set_status("Disconnected")
                     return False
 
+            # If redirected to Cloudflare (e.g. 1.1.1.1 client / WARP active), internet is fully unrestricted
+            if redirect_host.lower() in ("one.one.one.one", "1.1.1.1", "cloudflare.com") or redirect_host.lower().endswith(".cloudflare.com"):
+                self.log(f"[Probe] Redirected to public Cloudflare service ({redirect_host}). Connection is unrestricted.")
+                if not self.session_start:
+                    self.session_start = time.time()
+                if not was_connected:
+                    self.set_status("Connected")
+                    self.log("Shotgun Probe passed: Online and unrestricted (Cloudflare 1.1.1.1 / WARP active).")
+                    self.alert("ok")
+                return True
+
             # Bug 3: Validate redirect host against config allow-list, campus network, and gateway
             trusted_hosts = self.config.get("trusted_portal_hosts", [])
             campus_hosts = {"172.15.1.2", "172.15.1.1", "www.opn.gitjaipur.com", "opn.gitjaipur.com"}
@@ -2357,13 +2448,11 @@ class GitWifiCore:
 
             # If redirected to an access point/switch landing page (e.g., 172.7.0.1:80 Web Switch) without login inputs,
             # query the known college captive portal (172.15.1.2:8000) directly to fetch the actual login state.
-            # Bug 16 fix: Only trigger if current gateway is 172.7.0.1 or 172.15.1.2 is explicitly trusted
-            trusted_portal_hosts = self.config.get("trusted_portal_hosts", [])
-            is_campus_network = (
-                self.gateway_ip == "172.7.0.1" or
-                "172.15.1.2" in trusted_portal_hosts or
-                "www.opn.gitjaipur.com" in trusted_portal_hosts or
-                any("172.15.1.2" in str(h) or "gitjaipur.com" in str(h) for h in trusted_portal_hosts) or
+            # Bug 16 fix: Only trigger if verified to be on campus network
+            eff_mode = self.get_effective_network_mode()
+            is_campus_network = (eff_mode == "campus") or (
+                self.gateway_ip and any(self.gateway_ip.startswith(p) for p in ("172.7.", "172.15.", "10.17."))
+            ) or (
                 redirect_host in campus_hosts or
                 (redirect_host and redirect_host.endswith(".gitjaipur.com"))
             )
@@ -2372,6 +2461,7 @@ class GitWifiCore:
                 self.log(f"Gateway {redirect_host}:80 is an AP switch page. Checking dedicated captive portal...")
                 for probe_target, p_host, p_port, p_scheme in (
                     ("https://www.opn.gitjaipur.com:8000/index.html", "www.opn.gitjaipur.com", 8000, "https"),
+                    ("https://172.15.1.2:8000/index.html", "172.15.1.2", 8000, "https"),
                     ("http://172.15.1.2:8000/index.html", "172.15.1.2", 8000, "http"),
                 ):
                     try:
